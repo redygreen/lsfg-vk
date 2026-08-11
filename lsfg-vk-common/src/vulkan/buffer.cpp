@@ -97,3 +97,10 @@ Buffer::Buffer(const vk::Vulkan& vk, const void* data, size_t size, VkBufferUsag
         size(size) {
     copyDataToBuffer(vk, *this->memory, data, size);
 }
+
+void Buffer::update(const vk::Vulkan& vk, const void* data, size_t size) {
+    if (size > this->size)
+        throw ls::vulkan_error("buffer update exceeds allocated size");
+
+    copyDataToBuffer(vk, *this->memory, data, size);
+}

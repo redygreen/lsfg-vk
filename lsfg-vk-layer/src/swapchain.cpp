@@ -11,6 +11,8 @@
 #include "lsfg-vk-common/vulkan/vulkan.hpp"
 
 #include <algorithm>
+#include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -128,16 +130,122 @@ Swapchain::Swapchain(const vk::Vulkan& vk, backend::Instance& backend,
     }
 }
 
+size_t Swapchain::chooseGeneratedCount() {
+    const size_t maxGen = this->destinationImages.size();
+    if (!this->profile.adaptive)
+        return maxGen;
+
+    const auto now = std::chrono::steady_clock::now();
+    if (!this->lastPresentTime.has_value()) {
+        this->lastPresentTime = now;
+        this->adaptiveError = 0.0;
+        return 0;
+    }
+
+    const double measured = std::chrono::duration<double>(now - *this->lastPresentTime).count();
+    this->lastPresentTime = now;
+
+    // Ignore implausible intervals (hitches / first frames after stalls).
+    if (measured < 0.0005 || measured > 0.100) {
+        this->adaptiveError = 0.0;
+        return 0;
+    }
+
+    const double targetDelta = 1.0 / static_cast<double>(this->profile.target_fps);
+    // Accumulate how many displayed frames this real interval should cover.
+    this->adaptiveError += measured / targetDelta;
+
+    int total = static_cast<int>(std::floor(this->adaptiveError + 1e-6));
+    if (total < 1)
+        total = 1;
+
+    size_t genCount = static_cast<size_t>(total - 1);
+    if (genCount > maxGen)
+        genCount = maxGen;
+
+    this->adaptiveError -= static_cast<double>(genCount + 1);
+    if (this->adaptiveError < 0.0)
+        this->adaptiveError = 0.0;
+
+    return genCount;
+}
+
 VkResult Swapchain::present(const vk::Vulkan& vk,
         VkQueue queue, VkSwapchainKHR swapchain,
         void* next_chain, uint32_t imageIdx,
         const std::vector<VkSemaphore>& semaphores) {
     const auto& swapchainImage = this->info.images.at(imageIdx);
     const auto& sourceImage = this->sourceImages.at(this->fidx % 2);
+    const size_t genCount = chooseGeneratedCount();
 
-    // schedule frame generation
+    // Passthrough: keep source history fresh, present the real frame, no FG.
+    if (genCount == 0) {
+        try {
+            this->instance.get().scheduleFrames(this->ctx.get(), 0);
+        } catch (const std::exception& e) {
+            throw ls::error("failed to schedule frames", e);
+        }
+
+        if (this->fidx && !this->renderFence->wait(vk, 150ULL * 1000 * 1000))
+            throw ls::vulkan_error(VK_TIMEOUT, "vkWaitForFences() failed");
+        this->renderFence->reset(vk);
+
+        auto& pcs = this->postCopySemaphores.at(this->fidx % this->postCopySemaphores.size());
+        const auto& cmdbuf = *this->renderCommandBuffer;
+        cmdbuf.begin(vk);
+        cmdbuf.blitImage(vk,
+            {
+                barrierHelper(swapchainImage,
+                    VK_ACCESS_NONE,
+                    VK_ACCESS_TRANSFER_READ_BIT,
+                    VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL
+                ),
+                barrierHelper(sourceImage.handle(),
+                    VK_ACCESS_NONE,
+                    VK_ACCESS_TRANSFER_WRITE_BIT,
+                    VK_IMAGE_LAYOUT_UNDEFINED,
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL
+                ),
+            },
+            { swapchainImage, sourceImage.handle() },
+            sourceImage.getExtent(),
+            {
+                barrierHelper(swapchainImage,
+                    VK_ACCESS_TRANSFER_READ_BIT,
+                    VK_ACCESS_MEMORY_READ_BIT,
+                    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                    VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
+                ),
+            }
+        );
+        cmdbuf.end(vk);
+        cmdbuf.submit(vk,
+            semaphores, VK_NULL_HANDLE, 0,
+            { pcs.first.handle() }, VK_NULL_HANDLE, 0,
+            this->renderFence->handle()
+        );
+
+        const VkPresentInfoKHR presentInfo{
+            .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+            .pNext = next_chain,
+            .waitSemaphoreCount = 1,
+            .pWaitSemaphores = &pcs.first.handle(),
+            .swapchainCount = 1,
+            .pSwapchains = &swapchain,
+            .pImageIndices = &imageIdx,
+        };
+        auto res = vk.df().QueuePresentKHR(queue, &presentInfo);
+        if (res != VK_SUCCESS && res != VK_SUBOPTIMAL_KHR)
+            throw ls::vulkan_error(res, "vkQueuePresentKHR() failed");
+
+        this->fidx++;
+        return res;
+    }
+
+    // schedule frame generation for exactly genCount intermediates
     try {
-        this->instance.get().scheduleFrames(this->ctx.get());
+        this->instance.get().scheduleFrames(this->ctx.get(), genCount);
     } catch (const std::exception& e) {
         throw ls::error("failed to schedule frames", e);
     }
@@ -202,7 +310,7 @@ VkResult Swapchain::present(const vk::Vulkan& vk,
         {}, this->syncSemaphore->handle(), this->idx++
     );
 
-    for (size_t i = 0; i < this->destinationImages.size(); i++) {
+    for (size_t i = 0; i < genCount; i++) {
         auto& pcs = this->postCopySemaphores.at(this->idx % this->postCopySemaphores.size());
         auto& destinationImage = this->destinationImages.at(i);
         auto& pass = this->passes.at(i);
@@ -265,7 +373,7 @@ VkResult Swapchain::present(const vk::Vulkan& vk,
         cmdbuf.submit(vk,
             waitSemaphores, this->syncSemaphore->handle(), this->idx,
             signalSemaphores, VK_NULL_HANDLE, 0,
-            i == this->destinationImages.size() - 1 ? this->renderFence->handle() : VK_NULL_HANDLE
+            i == genCount - 1 ? this->renderFence->handle() : VK_NULL_HANDLE
         );
 
         // present swapchain image

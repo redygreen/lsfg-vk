@@ -30,6 +30,8 @@ namespace lsfgvk::ui {
         Q_PROPERTY(QStringListModel* active_in READ calculateActiveInModel NOTIFY refreshUI)
         Q_PROPERTY(int active_in_index READ getActiveInIndex WRITE activeInSelected NOTIFY refreshUI)
         Q_PROPERTY(size_t multiplier READ getMultiplier WRITE multiplierUpdated NOTIFY refreshUI)
+        Q_PROPERTY(bool adaptive READ getAdaptive WRITE adaptiveUpdated NOTIFY refreshUI)
+        Q_PROPERTY(float target_fps READ getTargetFps WRITE targetFpsUpdated NOTIFY refreshUI)
         Q_PROPERTY(float flow_scale READ getFlowScale WRITE flowScaleUpdated NOTIFY refreshUI)
         Q_PROPERTY(bool performance_mode READ getPerformanceMode WRITE performanceModeUpdated NOTIFY refreshUI)
         Q_PROPERTY(int pacing_mode READ getPacingMode WRITE pacingModeUpdated NOTIFY refreshUI)
@@ -73,6 +75,14 @@ namespace lsfgvk::ui {
         [[nodiscard]] size_t getMultiplier() const {
             VALIDATE_AND_GET_PROFILE(2)
             return conf.multiplier;
+        }
+        [[nodiscard]] bool getAdaptive() const {
+            VALIDATE_AND_GET_PROFILE(false)
+            return conf.adaptive;
+        }
+        [[nodiscard]] float getTargetFps() const {
+            VALIDATE_AND_GET_PROFILE(60.0F)
+            return conf.target_fps;
         }
         [[nodiscard]] float getFlowScale() const {
             VALIDATE_AND_GET_PROFILE(1.0F)
@@ -136,6 +146,16 @@ namespace lsfgvk::ui {
         void multiplierUpdated(size_t multiplier) {
             VALIDATE_AND_GET_PROFILE()
             conf.multiplier = multiplier;
+            MARK_DIRTY()
+        }
+        void adaptiveUpdated(bool adaptive) {
+            VALIDATE_AND_GET_PROFILE()
+            conf.adaptive = adaptive;
+            MARK_DIRTY()
+        }
+        void targetFpsUpdated(float target_fps) {
+            VALIDATE_AND_GET_PROFILE()
+            conf.target_fps = target_fps;
             MARK_DIRTY()
         }
         void flowScaleUpdated(float flow_scale) {

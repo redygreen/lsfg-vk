@@ -38,6 +38,22 @@ namespace vk {
         /// get the size of the buffer
         /// @return the size of the buffer in bytes
         [[nodiscard]] size_t length() const { return this->size; }
+
+        /// overwrite the buffer contents
+        /// @param vk the vulkan instance
+        /// @param data new data uploaded to the buffer
+        /// @throws ls::vulkan_error on failure
+        template<typename T>
+        void update(const vk::Vulkan& vk, const T& data) {
+            update(vk, reinterpret_cast<const void*>(&data), sizeof(T));
+        }
+
+        /// overwrite the buffer contents
+        /// @param vk the vulkan instance
+        /// @param data new data uploaded to the buffer
+        /// @param size size of the data in bytes
+        /// @throws ls::vulkan_error on failure
+        void update(const vk::Vulkan& vk, const void* data, size_t size);
     private:
         ls::owned_ptr<VkBuffer> buffer;
         ls::owned_ptr<VkDeviceMemory> memory;

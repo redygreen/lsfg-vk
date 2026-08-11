@@ -103,8 +103,8 @@ namespace lsfgvk::backend {
             VkExtent2D extent, bool hdr, float flow, bool perf);
 
         /// schedule frames
-        /// (see lsfg-vk documentation)
-        void scheduleFrames();
+        /// @param genCount number of intermediate frames to generate
+        void scheduleFrames(size_t genCount);
     private:
         std::pair<vk::Image, vk::Image> sourceImages;
         std::vector<vk::Image> destImages;
@@ -117,6 +117,7 @@ namespace lsfgvk::backend {
 
         std::vector<vk::CommandBuffer> cmdbufs;
         vk::Fence cmdbufFence;
+        bool prevHadGpuWork{false};
 
         Ctx ctx;
 
@@ -549,6 +550,10 @@ ContextImpl::ContextImpl(const InstanceImpl& instance,
 }
 
 void Instance::scheduleFrames(Context& context) { // NOLINT (static)
+    scheduleFrames(context, static_cast<size_t>(-1));
+}
+
+void Instance::scheduleFrames(Context& context, size_t genCount) { // NOLINT (static)
 #ifdef LSFGVK_TESTING_RENDERDOC
     const auto& impl = this->m_impl;
     if (impl->getRenderDocAPI()) {
@@ -558,7 +563,7 @@ void Instance::scheduleFrames(Context& context) { // NOLINT (static)
     }
 #endif
     try {
-        context.scheduleFrames();
+        context.scheduleFrames(genCount);
     } catch (const std::exception& e) {
         throw backend::error("Unable to schedule frames", e);
     }
@@ -572,11 +577,31 @@ void Instance::scheduleFrames(Context& context) { // NOLINT (static)
 #endif
 }
 
-void Context::scheduleFrames() {
-    // wait for previous pre-pass to complete
-    if (this->fidx && !this->cmdbufFence.wait(this->ctx.vk))
-        throw backend::error("Timeout waiting for previous frame to complete");
-    this->cmdbufFence.reset(this->ctx.vk);
+void Context::scheduleFrames(size_t genCount) {
+    const size_t maxGen = this->destImages.size();
+    if (genCount == static_cast<size_t>(-1))
+        genCount = maxGen;
+    if (genCount > maxGen)
+        throw backend::error("genCount exceeds destination image count");
+
+    // zero means passthrough: keep the real-frame index aligned with the layer
+    if (genCount == 0) {
+        this->fidx++;
+        return;
+    }
+
+    // wait for previous GPU schedule before rewriting timestamps / reusing cmdbufs
+    if (this->prevHadGpuWork) {
+        if (!this->cmdbufFence.wait(this->ctx.vk))
+            throw backend::error("Timeout waiting for previous frame to complete");
+        this->cmdbufFence.reset(this->ctx.vk);
+    }
+
+    // rewrite interpolation timestamps for the requested generated-frame count
+    for (size_t i = 0; i < genCount; i++) {
+        this->ctx.constantBuffers.at(i).update(this->ctx.vk,
+            backend::getDefaultConstantBuffer(i, genCount, this->ctx.flow));
+    }
 
     // schedule pre-pass
     const auto& cmdbuf = this->cmdbufs.at(0);
@@ -598,8 +623,8 @@ void Context::scheduleFrames() {
 
     this->idx++;
 
-    // schedule main passes
-    for (size_t i = 0; i < this->destImages.size(); i++) {
+    // schedule main passes for the first genCount destinations
+    for (size_t i = 0; i < genCount; i++) {
         const auto& cmdbuf = this->cmdbufs.at(i + 1);
         cmdbuf.begin(ctx.vk);
 
@@ -618,12 +643,13 @@ void Context::scheduleFrames() {
         cmdbuf.submit(this->ctx.vk,
             {}, this->prepassSemaphore.handle(), this->idx - 1,
             {}, this->syncSemaphore.handle(), this->idx + i,
-            i == this->destImages.size() - 1 ? this->cmdbufFence.handle() : VK_NULL_HANDLE
+            i == genCount - 1 ? this->cmdbufFence.handle() : VK_NULL_HANDLE
         );
     }
 
-    this->idx += this->destImages.size();
+    this->idx += genCount;
     this->fidx++;
+    this->prevHadGpuWork = true;
 }
 
 void Instance::closeContext(const Context& context) {

@@ -12,7 +12,9 @@
 #include "lsfg-vk-common/vulkan/timeline_semaphore.hpp"
 #include "lsfg-vk-common/vulkan/vulkan.hpp"
 
+#include <chrono>
 #include <cstdint>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -59,6 +61,9 @@ namespace lsfgvk::layer {
             void* next_chain, uint32_t imageIdx,
             const std::vector<VkSemaphore>& semaphores);
     private:
+        /// choose how many intermediate frames to generate for this real present
+        [[nodiscard]] size_t chooseGeneratedCount();
+
         std::vector<vk::Image> sourceImages;
         std::vector<vk::Image> destinationImages;
         ls::lazy<vk::TimelineSemaphore> syncSemaphore;
@@ -79,6 +84,9 @@ namespace lsfgvk::layer {
 
         ls::GameConf profile;
         SwapchainInfo info;
+
+        std::optional<std::chrono::steady_clock::time_point> lastPresentTime;
+        double adaptiveError{0.0}; // Bresenham-style fractional accumulator
     };
 
 }

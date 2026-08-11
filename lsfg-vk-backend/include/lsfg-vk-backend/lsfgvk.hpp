@@ -109,10 +109,24 @@ namespace lsfgvk::backend {
         ///
         /// Schedule a new set of generated frames.
         ///
+        /// Generates every destination image owned by the context. Equivalent to
+        /// scheduleFrames(context, destination count).
+        ///
         /// @param context Context to use.
         /// @throws backend::error on failure
         ///
         void scheduleFrames(Context& context);
+
+        ///
+        /// Schedule a variable number of generated frames.
+        ///
+        /// @param context Context to use.
+        /// @param genCount Number of intermediate frames to generate (0 .. destination count).
+        ///                 Timestamps are rewritten to (i+1)/(genCount+1). A zero count only
+        ///                 advances the internal real-frame index and performs no GPU work.
+        /// @throws backend::error on failure
+        ///
+        void scheduleFrames(Context& context, size_t genCount);
 
         ///
         /// Close a frame generation context
