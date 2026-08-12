@@ -19,25 +19,20 @@ It is **not** a drop-in replacement for the official plugin. Paths, layer filena
 
 HDR mode and experimental present-mode toggles from the 1.x plugin are omitted: v2 infers HDR from the swapchain format.
 
-## Build the plugin zip
+## Installation
 
-From the repository root, package the layer into `decky-plugin/bin/lsfg-vk_noui.zip` (already done for the committed binary):
+A ready-to-install zip is in this folder: [`Decky-LSFG-VK-Adaptive.zip`](Decky-LSFG-VK-Adaptive.zip).
+
+1. Copy that zip to the Steam Deck.
+2. In Game Mode: Decky → settings cog → enable Developer Mode → Developer → **Install Plugin from Zip**.
+3. Open **LSFG Adaptive**, click Install, then add `~/lsfg-vk-adaptive %command%` to the game.
+
+To rebuild the zip after changing the plugin or layer:
 
 ```bash
 ./scripts/package-decky-layer.sh
+./scripts/package-decky-plugin.sh
 ```
-
-Then build the Decky plugin with [Decky CLI](https://github.com/SteamDeckHomebrew/cli) from `decky-plugin/`:
-
-```bash
-cd decky-plugin
-python3 scripts/generate_ts_schema.py
-pnpm install
-pnpm build
-# or: decky plugin build
-```
-
-Install the resulting zip in Game Mode: Decky → settings cog → Developer Mode → Install Plugin from Zip.
 
 ## How to use
 

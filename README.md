@@ -8,7 +8,7 @@
 
 ## Installation
 >[!TIP]
-> If you are on a Steam Deck, this fork includes an Adaptive Decky plugin in [`decky-plugin/`](decky-plugin/README.md). It installs this engine's v2 layer and does not overwrite the official Decky LSFG-VK plugin. Launch option: `~/lsfg-vk-adaptive %command%`.
+> If you are on a Steam Deck, download [`Decky-LSFG-VK-Adaptive.zip`](decky-plugin/Decky-LSFG-VK-Adaptive.zip) and install it via Decky Developer Mode. Launch option: `~/lsfg-vk-adaptive %command%`. It does not overwrite the official Decky LSFG-VK plugin.
 > The [official Decky plugin](https://github.com/xXJSONDeruloXx/decky-lsfg-vk) still targets lsfg-vk 1.x and has no Adaptive support.
 
 1. Before proceeding, please make sure you have [Lossless Scaling](https://store.steampowered.com/app/993090/Lossless_Scaling/) downloaded on Steam.
