@@ -326,7 +326,8 @@ namespace {
                 .format = newInfo.imageFormat,
                 .colorSpace = newInfo.imageColorSpace,
                 .extent = newInfo.imageExtent,
-                .presentMode = newInfo.presentMode
+                .presentMode = newInfo.presentMode,
+                .imageUsage = newInfo.imageUsage
             }).first->second;
 
             // create lsfg-vk swapchain
@@ -420,6 +421,58 @@ namespace {
 #pragma clang diagnostic pop
     }
 
+    VkResult myvkGetSwapchainImagesKHR(
+            VkDevice device,
+            VkSwapchainKHR swapchain,
+            uint32_t* count,
+            VkImage* images) {
+        const auto& it = instance_info->devices.find(device);
+        if (it == instance_info->devices.end())
+            return VK_ERROR_INITIALIZATION_FAILED;
+
+        if (auto* context = layer_info->root.tryGetSwapchainContext(swapchain);
+                context && context->usesVirtualSwapchain())
+            return context->getSwapchainImages(count, images);
+
+        return it->second.df().GetSwapchainImagesKHR(device, swapchain, count, images);
+    }
+
+    VkResult myvkAcquireNextImageKHR(
+            VkDevice device,
+            VkSwapchainKHR swapchain,
+            uint64_t timeout,
+            VkSemaphore semaphore,
+            VkFence fence,
+            uint32_t* idx) {
+        const auto& it = instance_info->devices.find(device);
+        if (it == instance_info->devices.end())
+            return VK_ERROR_INITIALIZATION_FAILED;
+
+        if (auto* context = layer_info->root.tryGetSwapchainContext(swapchain);
+                context && context->usesVirtualSwapchain()) {
+            try {
+                return context->acquireNextImage(it->second, timeout, semaphore, fence, idx);
+            } catch (const ls::vulkan_error& e) {
+                return e.error();
+            } catch (const std::exception&) {
+                return VK_ERROR_UNKNOWN;
+            }
+        }
+
+        return it->second.df().AcquireNextImageKHR(device, swapchain, timeout,
+            semaphore, fence, idx);
+    }
+
+    VkResult myvkAcquireNextImage2KHR(
+            VkDevice device,
+            const VkAcquireNextImageInfoKHR* info,
+            uint32_t* idx) {
+        if (!info)
+            return VK_ERROR_INITIALIZATION_FAILED;
+        return myvkAcquireNextImageKHR(device, info->swapchain, info->timeout,
+            info->semaphore, info->fence, idx);
+    }
+
     void myvkDestroySwapchainKHR(
             VkDevice device,
             VkSwapchainKHR swapchain,
@@ -471,6 +524,9 @@ VkResult vkNegotiateLoaderLayerInterfaceVersion(VkNegotiateLayerInterface* pVers
                 { "vkDestroyDevice", VKPTR(myvkDestroyDevice) },
                 { "vkDestroyInstance", VKPTR(myvkDestroyInstance) },
                 { "vkCreateSwapchainKHR", VKPTR(myvkCreateSwapchainKHR) },
+                { "vkGetSwapchainImagesKHR", VKPTR(myvkGetSwapchainImagesKHR) },
+                { "vkAcquireNextImageKHR", VKPTR(myvkAcquireNextImageKHR) },
+                { "vkAcquireNextImage2KHR", VKPTR(myvkAcquireNextImage2KHR) },
                 { "vkQueuePresentKHR", VKPTR(myvkQueuePresentKHR) },
                 { "vkDestroySwapchainKHR", VKPTR(myvkDestroySwapchainKHR) }
 #undef VKPTR

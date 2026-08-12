@@ -12,9 +12,14 @@
 #include "lsfg-vk-common/vulkan/timeline_semaphore.hpp"
 #include "lsfg-vk-common/vulkan/vulkan.hpp"
 
+#include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
+#include <deque>
+#include <mutex>
 #include <optional>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -29,6 +34,7 @@ namespace lsfgvk::layer {
         VkColorSpaceKHR colorSpace;
         VkExtent2D extent;
         VkPresentModeKHR presentMode;
+        VkImageUsageFlags imageUsage{VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT};
     };
 
     /// modify the swapchain create info based on the profile pre-swapchain creation
@@ -49,6 +55,12 @@ namespace lsfgvk::layer {
         Swapchain(const vk::Vulkan& vk, backend::Instance& backend,
             ls::GameConf profile, SwapchainInfo info);
 
+        Swapchain(const Swapchain&) = delete;
+        Swapchain& operator=(const Swapchain&) = delete;
+        Swapchain(Swapchain&&) = delete;
+        Swapchain& operator=(Swapchain&&) = delete;
+        ~Swapchain();
+
         /// present a frame
         /// @param vk vulkan instance
         /// @param queue presentation queue
@@ -60,16 +72,44 @@ namespace lsfgvk::layer {
             VkQueue queue, VkSwapchainKHR swapchain,
             void* next_chain, uint32_t imageIdx,
             const std::vector<VkSemaphore>& semaphores);
+
+        /// whether the game sees virtual swapchain images
+        [[nodiscard]] bool usesVirtualSwapchain() const { return this->profile.adaptive; }
+
+        /// reimplement vkGetSwapchainImagesKHR for the virtual swapchain
+        VkResult getSwapchainImages(uint32_t* count, VkImage* images) const;
+
+        /// reimplement vkAcquireNextImageKHR for the virtual swapchain
+        VkResult acquireNextImage(const vk::Vulkan& vk, uint64_t timeout,
+            VkSemaphore semaphore, VkFence fence, uint32_t* idx);
     private:
-        /// choose how many intermediate frames to generate for this real present
+        struct RealFrame {
+            size_t fidx{};
+            std::chrono::steady_clock::time_point t{};
+        };
+
         [[nodiscard]] size_t chooseGeneratedCount();
+        VkResult presentFixed(const vk::Vulkan& vk,
+            VkQueue queue, VkSwapchainKHR swapchain,
+            void* next_chain, uint32_t imageIdx,
+            const std::vector<VkSemaphore>& semaphores);
+        VkResult presentAdaptive(const vk::Vulkan& vk,
+            VkQueue queue, uint32_t imageIdx,
+            const std::vector<VkSemaphore>& semaphores);
+
+        void pacerMain() noexcept;
+        void presentOutput(const vk::Vulkan& vk, VkImage src,
+            VkSemaphore waitTimeline, uint64_t waitValue, bool waitTimelineValid);
+        void forceFifo(void* next_chain) const;
 
         std::vector<vk::Image> sourceImages;
         std::vector<vk::Image> destinationImages;
+        std::vector<vk::Image> virtualImages;
         ls::lazy<vk::TimelineSemaphore> syncSemaphore;
 
         ls::lazy<vk::CommandBuffer> renderCommandBuffer;
         ls::lazy<vk::Fence> renderFence;
+        ls::lazy<vk::Fence> copyFence;
         struct RenderPass {
             vk::CommandBuffer commandBuffer;
             vk::Semaphore acquireSemaphore;
@@ -86,7 +126,19 @@ namespace lsfgvk::layer {
         SwapchainInfo info;
 
         std::optional<std::chrono::steady_clock::time_point> lastPresentTime;
-        double adaptiveError{0.0}; // Bresenham-style fractional accumulator
+        double adaptiveError{0.0};
+
+        std::mutex queueMutex;
+        std::mutex pacerMutex;
+        std::condition_variable pacerCv;
+        std::deque<RealFrame> pendingFrames;
+        std::vector<uint32_t> availableVirtual;
+        std::atomic_bool running{false};
+        std::atomic<VkResult> pacerStatus{VK_SUCCESS};
+        std::thread pacer;
+        VkQueue presentQueue{VK_NULL_HANDLE};
+        VkSwapchainKHR realSwapchain{VK_NULL_HANDLE};
+        const vk::Vulkan* pacerVk{nullptr};
     };
 
 }

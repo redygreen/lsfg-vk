@@ -12,13 +12,20 @@
 using namespace lsfgvk;
 using namespace lsfgvk::backend;
 
-ConstantBuffer backend::getDefaultConstantBuffer(
-        size_t index, size_t total, float invFlow) {
+ConstantBuffer backend::getConstantBuffer(float timestamp, float invFlow) {
     return ConstantBuffer {
         .resolutionInvScale = invFlow,
-        .timestamp = static_cast<float>(index + 1) / static_cast<float>(total + 1),
+        .timestamp = timestamp,
         .uiThreshold = 0.5F
     };
+}
+
+ConstantBuffer backend::getDefaultConstantBuffer(
+        size_t index, size_t total, float invFlow) {
+    return getConstantBuffer(
+        static_cast<float>(index + 1) / static_cast<float>(total + 1),
+        invFlow
+    );
 }
 
 VkExtent2D backend::shift_extent(VkExtent2D extent, uint32_t i) {

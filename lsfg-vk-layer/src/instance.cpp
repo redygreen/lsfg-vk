@@ -206,7 +206,7 @@ void Root::createSwapchainContext(const vk::Vulkan& vk,
     }
 
     this->swapchains.emplace(swapchain,
-        Swapchain(vk, this->backend.mut(), profile, info));
+        std::make_unique<Swapchain>(vk, this->backend.mut(), profile, info));
 }
 
 void Root::removeSwapchainContext(VkSwapchainKHR swapchain) {

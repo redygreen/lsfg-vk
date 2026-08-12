@@ -3,11 +3,14 @@ set(LAYER_SOURCES
     "src/instance.cpp"
     "src/swapchain.cpp")
 
+find_package(Threads REQUIRED)
+
 add_library(lsfg-vk-layer SHARED ${LAYER_SOURCES})
 
 target_link_libraries(lsfg-vk-layer
     PUBLIC lsfg-vk-common
-    PUBLIC lsfg-vk-backend)
+    PUBLIC lsfg-vk-backend
+    PUBLIC Threads::Threads)
 
 target_compile_options(lsfg-vk-layer PRIVATE
     -Wno-unknown-warning-option

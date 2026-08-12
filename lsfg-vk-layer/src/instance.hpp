@@ -9,6 +9,7 @@
 #include "lsfg-vk-common/vulkan/vulkan.hpp"
 #include "swapchain.hpp"
 
+#include <memory>
 #include <optional>
 #include <unordered_map>
 
@@ -64,7 +65,16 @@ namespace lsfgvk::layer {
             if (it == this->swapchains.end())
                 throw ls::error("swapchain context not found");
 
-            return it->second;
+            return *it->second;
+        }
+        /// get swapchain context if it exists
+        /// @param swapchain swapchain handle
+        /// @return swapchain context or nullptr
+        [[nodiscard]] Swapchain* tryGetSwapchainContext(VkSwapchainKHR swapchain) {
+            const auto& it = this->swapchains.find(swapchain);
+            if (it == this->swapchains.end())
+                return nullptr;
+            return it->second.get();
         }
         /// remove swapchain context
         /// @param swapchain swapchain handle
@@ -74,7 +84,7 @@ namespace lsfgvk::layer {
         std::optional<ls::GameConf> active_profile;
 
         ls::lazy<backend::Instance> backend;
-        std::unordered_map<VkSwapchainKHR, Swapchain> swapchains;
+        std::unordered_map<VkSwapchainKHR, std::unique_ptr<Swapchain>> swapchains;
     };
 
 }
