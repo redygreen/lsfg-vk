@@ -1,0 +1,449 @@
+"""
+Configuration service for TOML-based lsfg configuration management.
+"""
+
+from pathlib import Path
+from typing import Dict, Any
+
+from .base_service import BaseService
+from .config_schema import ConfigurationManager, CONFIG_SCHEMA, ProfileData, DEFAULT_PROFILE_NAME
+from .config_schema_generated import ConfigurationData, get_script_generation_logic
+from .constants import ARMADA_DEVICE_ENV, ARMADA_GAME_LAUNCH
+from .types import ConfigurationResponse, ProfilesResponse, ProfileResponse
+
+
+class ConfigurationService(BaseService):
+    """Service for managing TOML-based lsfg configuration"""
+    
+    def get_config(self) -> ConfigurationResponse:
+        """Read current TOML configuration merged with launch script environment variables
+        
+        Returns:
+            ConfigurationResponse with current configuration or error
+        """
+        try:
+            if not self.config_file_path.exists():
+                from .dll_detection import DllDetectionService
+                dll_service = DllDetectionService(self.log)
+                toml_config = ConfigurationManager.get_defaults_with_dll_detection(dll_service)
+            else:
+                content = self.config_file_path.read_text(encoding='utf-8')
+                toml_config = ConfigurationManager.parse_toml_content(content)
+            
+            script_values = {}
+            if self.lsfg_script_path.exists():
+                try:
+                    script_content = self.lsfg_script_path.read_text(encoding='utf-8')
+                    script_values = ConfigurationManager.parse_script_content(script_content)
+                    self.log.info(f"Parsed script values: {script_values}")
+                except Exception as e:
+                    self.log.warning(f"Failed to parse launch script: {str(e)}")
+            
+            config = ConfigurationManager.merge_config_with_script(toml_config, script_values)
+            
+            return self._success_response(ConfigurationResponse, config=config)
+            
+        except (OSError, IOError) as e:
+            error_msg = f"Error reading lsfg config: {str(e)}"
+            self.log.error(error_msg)
+            return self._error_response(ConfigurationResponse, str(e), config=None)
+        except Exception as e:
+            error_msg = f"Error parsing config file: {str(e)}"
+            self.log.error(error_msg)
+            from .dll_detection import DllDetectionService
+            dll_service = DllDetectionService(self.log)
+            config = ConfigurationManager.get_defaults_with_dll_detection(dll_service)
+            return self._success_response(ConfigurationResponse, 
+                                        f"Using default configuration due to parse error: {str(e)}", 
+                                        config=config)
+    
+    def update_config_from_dict(self, config: ConfigurationData) -> ConfigurationResponse:
+        """Update TOML configuration from configuration dictionary (eliminates parameter duplication)
+        
+        Args:
+            config: Complete configuration data dictionary
+            
+        Returns:
+            ConfigurationResponse with success status
+        """
+        try:
+            profile_data = self._get_profile_data()
+            current_profile = profile_data["current_profile"]
+            
+            return self.update_profile_config(current_profile, config)
+            
+        except (OSError, IOError) as e:
+            error_msg = f"Error updating lsfg config: {str(e)}"
+            self.log.error(error_msg)
+            return self._error_response(ConfigurationResponse, str(e), config=None)
+        except ValueError as e:
+            error_msg = f"Invalid configuration arguments: {str(e)}"
+            self.log.error(error_msg)
+            return self._error_response(ConfigurationResponse, str(e), config=None)
+    
+    def update_lsfg_script(self, config: ConfigurationData) -> ConfigurationResponse:
+        """Update the ~/lsfg-vk-adaptive launch script with current configuration
+        
+        Args:
+            config: Configuration data to apply to the script
+            
+        Returns:
+            ConfigurationResponse indicating success or failure
+        """
+        try:
+            script_content = self._generate_script_content(config)
+            
+            self._write_file(self.lsfg_script_path, script_content, 0o755)
+            
+            self.log.info(f"Updated lsfg launch script at {self.lsfg_script_path}")
+            
+            return self._success_response(ConfigurationResponse,
+                                        "Launch script updated successfully",
+                                        config=config)
+            
+        except Exception as e:
+            error_msg = f"Error updating launch script: {str(e)}"
+            self.log.error(error_msg)
+            return self._error_response(ConfigurationResponse, str(e), config=None)
+    
+    def _generate_script_content(self, config: ConfigurationData) -> str:
+        """Generate the content for the ~/lsfg-vk-adaptive launch script
+        
+        Args:
+            config: Configuration data to apply to the script
+            
+        Returns:
+            The complete script content as a string
+        """
+        lines = [
+            "#!/bin/bash",
+            "# lsfg-vk Adaptive launch script generated by decky-lsfg-vk-adaptive",
+            "# Isolated from the official ~/lsfg wrapper and ~/.config/lsfg-vk config.",
+        ]
+        
+        generate_script_lines = get_script_generation_logic()
+        lines.extend(generate_script_lines(config))
+        
+        lines.append(f'export LSFGVK_CONFIG="{self.config_file_path}"')
+        lines.append(f'export LSFGVK_PROFILE={DEFAULT_PROFILE_NAME}')
+        lines.extend(self._generate_game_launch_lines())
+        
+        return "\n".join(lines) + "\n"
+    
+    def _generate_script_content_for_profile(self, profile_data: ProfileData) -> str:
+        """Generate the content for the ~/lsfg-vk-adaptive launch script with profile support
+        
+        Args:
+            profile_data: Profile data containing current profile and configurations
+            
+        Returns:
+            The complete script content as a string
+        """
+        current_profile = profile_data["current_profile"]
+        config = profile_data["profiles"].get(current_profile, ConfigurationManager.get_defaults())
+        
+        merged_config = dict(config)
+        for field_name, value in profile_data["global_config"].items():
+            merged_config[field_name] = value
+        
+        lines = [
+            "#!/bin/bash",
+            "# lsfg-vk Adaptive launch script generated by decky-lsfg-vk-adaptive",
+            f"# Current profile: {current_profile}",
+        ]
+        
+        generate_script_lines = get_script_generation_logic()
+        lines.extend(generate_script_lines(merged_config))
+        
+        lines.append(f'export LSFGVK_CONFIG="{self.config_file_path}"')
+        lines.append(f"export LSFGVK_PROFILE={current_profile}")
+        lines.extend(self._generate_game_launch_lines())
+        
+        return "\n".join(lines) + "\n"
+
+    @staticmethod
+    def _generate_game_launch_lines() -> list[str]:
+        """Generate a portable exec block with Armada's host wrapper."""
+        device_env = ARMADA_DEVICE_ENV.as_posix()
+        game_launch = ARMADA_GAME_LAUNCH.as_posix()
+        return [
+            f'armada_game_launch="{game_launch}"',
+            'for argument in "$@"; do',
+            '    if [ "$argument" = "$armada_game_launch" ]; then',
+            '        exec "$@"',
+            "    fi",
+            "done",
+            f'if [ -f "{device_env}" ] && [ -x "$armada_game_launch" ]; then',
+            '    exec "$armada_game_launch" "$@"',
+            "fi",
+            'exec "$@"',
+        ]
+    
+    def _get_profile_data(self) -> ProfileData:
+        """Get current profile data from config file"""
+        if not self.config_file_path.exists():
+            from .dll_detection import DllDetectionService
+            dll_service = DllDetectionService(self.log)
+            default_config = ConfigurationManager.get_defaults_with_dll_detection(dll_service)
+            return ProfileData(
+                current_profile=DEFAULT_PROFILE_NAME,
+                profiles={DEFAULT_PROFILE_NAME: default_config},
+                global_config={
+                    "dll": default_config.get("dll", ""),
+                    "no_fp16": False
+                }
+            )
+        
+        content = self.config_file_path.read_text(encoding='utf-8')
+        return ConfigurationManager.parse_toml_content_multi_profile(content)
+    
+    def _save_profile_data(self, profile_data: ProfileData) -> None:
+        """Save profile data to config file"""
+        toml_content = ConfigurationManager.generate_toml_content_multi_profile(profile_data)
+        
+        self.config_dir.mkdir(parents=True, exist_ok=True)
+        
+        self._write_file(self.config_file_path, toml_content, 0o644)
+    
+    def get_profiles(self) -> ProfilesResponse:
+        """Get list of all profiles and current profile
+        
+        Returns:
+            ProfilesResponse with profile list and current profile
+        """
+        try:
+            profile_data = self._get_profile_data()
+            
+            return self._success_response(ProfilesResponse,
+                                        "Profiles retrieved successfully",
+                                        profiles=list(profile_data["profiles"].keys()),
+                                        current_profile=profile_data["current_profile"])
+            
+        except Exception as e:
+            error_msg = f"Error getting profiles: {str(e)}"
+            self.log.error(error_msg)
+            return self._error_response(ProfilesResponse, str(e), 
+                                       profiles=None, current_profile=None)
+    
+    def create_profile(self, profile_name: str, source_profile: str = None) -> ProfileResponse:
+        """Create a new profile
+        
+        Args:
+            profile_name: Name for the new profile (spaces will be converted to dashes)
+            source_profile: Optional source profile to copy from (default: current profile)
+            
+        Returns:
+            ProfileResponse with success status and the normalized profile name
+        """
+        try:
+            profile_data = self._get_profile_data()
+            
+            if not source_profile:
+                source_profile = profile_data["current_profile"]
+            
+            # Get the normalized name that will be used for storage
+            normalized_name = ConfigurationManager.normalize_profile_name(profile_name)
+            
+            new_profile_data = ConfigurationManager.create_profile(profile_data, profile_name, source_profile)
+            
+            self._save_profile_data(new_profile_data)
+            
+            self.log.info(f"Created profile '{normalized_name}' from '{source_profile}'")
+            
+            # Return the normalized name so frontend can use the actual stored name
+            return self._success_response(ProfileResponse,
+                                        f"Profile '{normalized_name}' created successfully",
+                                        profile_name=normalized_name)
+            
+        except ValueError as e:
+            error_msg = f"Invalid profile operation: {str(e)}"
+            self.log.error(error_msg)
+            return self._error_response(ProfileResponse, str(e), profile_name=None)
+        except Exception as e:
+            error_msg = f"Error creating profile: {str(e)}"
+            self.log.error(error_msg)
+            return self._error_response(ProfileResponse, str(e), profile_name=None)
+    
+    def delete_profile(self, profile_name: str) -> ProfileResponse:
+        """Delete a profile
+        
+        Args:
+            profile_name: Name of the profile to delete
+            
+        Returns:
+            ProfileResponse with success status
+        """
+        try:
+            profile_data = self._get_profile_data()
+            
+            new_profile_data = ConfigurationManager.delete_profile(profile_data, profile_name)
+            
+            self._save_profile_data(new_profile_data)
+            
+            script_result = self.update_lsfg_script_from_profile_data(new_profile_data)
+            if not script_result["success"]:
+                self.log.warning(f"Failed to update launch script: {script_result['error']}")
+            
+            self.log.info(f"Deleted profile '{profile_name}'")
+            
+            return self._success_response(ProfileResponse,
+                                        f"Profile '{profile_name}' deleted successfully",
+                                        profile_name=profile_name)
+            
+        except ValueError as e:
+            error_msg = f"Invalid profile operation: {str(e)}"
+            self.log.error(error_msg)
+            return self._error_response(ProfileResponse, str(e), profile_name=None)
+        except Exception as e:
+            error_msg = f"Error deleting profile: {str(e)}"
+            self.log.error(error_msg)
+            return self._error_response(ProfileResponse, str(e), profile_name=None)
+    
+    def rename_profile(self, old_name: str, new_name: str) -> ProfileResponse:
+        """Rename a profile
+        
+        Args:
+            old_name: Current profile name
+            new_name: New profile name (spaces will be converted to dashes)
+            
+        Returns:
+            ProfileResponse with success status and the normalized profile name
+        """
+        try:
+            profile_data = self._get_profile_data()
+            
+            # Get the normalized name that will be used for storage
+            normalized_name = ConfigurationManager.normalize_profile_name(new_name)
+            
+            new_profile_data = ConfigurationManager.rename_profile(profile_data, old_name, new_name)
+            
+            self._save_profile_data(new_profile_data)
+            
+            script_result = self.update_lsfg_script_from_profile_data(new_profile_data)
+            if not script_result["success"]:
+                self.log.warning(f"Failed to update launch script: {script_result['error']}")
+            
+            self.log.info(f"Renamed profile '{old_name}' to '{normalized_name}'")
+            
+            # Return the normalized name so frontend can use the actual stored name
+            return self._success_response(ProfileResponse,
+                                        f"Profile renamed from '{old_name}' to '{normalized_name}' successfully",
+                                        profile_name=normalized_name)
+            
+        except ValueError as e:
+            error_msg = f"Invalid profile operation: {str(e)}"
+            self.log.error(error_msg)
+            return self._error_response(ProfileResponse, str(e), profile_name=None)
+        except Exception as e:
+            error_msg = f"Error renaming profile: {str(e)}"
+            self.log.error(error_msg)
+            return self._error_response(ProfileResponse, str(e), profile_name=None)
+    
+    def set_current_profile(self, profile_name: str) -> ProfileResponse:
+        """Set the current active profile
+        
+        Args:
+            profile_name: Name of the profile to set as current
+            
+        Returns:
+            ProfileResponse with success status
+        """
+        try:
+            profile_data = self._get_profile_data()
+            
+            new_profile_data = ConfigurationManager.set_current_profile(profile_data, profile_name)
+            
+            self._save_profile_data(new_profile_data)
+            
+            script_result = self.update_lsfg_script_from_profile_data(new_profile_data)
+            if not script_result["success"]:
+                self.log.warning(f"Failed to update launch script: {script_result['error']}")
+            
+            self.log.info(f"Set current profile to '{profile_name}'")
+            
+            return self._success_response(ProfileResponse,
+                                        f"Current profile set to '{profile_name}' successfully",
+                                        profile_name=profile_name)
+            
+        except ValueError as e:
+            error_msg = f"Invalid profile operation: {str(e)}"
+            self.log.error(error_msg)
+            return self._error_response(ProfileResponse, str(e), profile_name=None)
+        except Exception as e:
+            error_msg = f"Error setting current profile: {str(e)}"
+            self.log.error(error_msg)
+            return self._error_response(ProfileResponse, str(e), profile_name=None)
+    
+    def update_profile_config(self, profile_name: str, config: ConfigurationData) -> ConfigurationResponse:
+        """Update configuration for a specific profile
+        
+        Args:
+            profile_name: Name of the profile to update
+            config: Configuration data to apply
+            
+        Returns:
+            ConfigurationResponse with success status
+        """
+        try:
+            profile_data = self._get_profile_data()
+            
+            if profile_name not in profile_data["profiles"]:
+                return self._error_response(ConfigurationResponse, 
+                                          f"Profile '{profile_name}' does not exist", 
+                                          config=None)
+            
+            # Update the profile's config
+            profile_data["profiles"][profile_name] = config
+            
+            # Update global config fields if they're in the config
+            for field_name in ["dll", "no_fp16"]:
+                if field_name in config:
+                    profile_data["global_config"][field_name] = config[field_name]
+            
+            self._save_profile_data(profile_data)
+            
+            if profile_name == profile_data["current_profile"]:
+                script_result = self.update_lsfg_script_from_profile_data(profile_data)
+                if not script_result["success"]:
+                    self.log.warning(f"Failed to update launch script: {script_result['error']}")
+            
+            field_values = ", ".join(f"{k}={repr(v)}" for k, v in config.items())
+            self.log.info(f"Updated profile '{profile_name}' configuration: {field_values}")
+            
+            return self._success_response(ConfigurationResponse,
+                                        f"Profile '{profile_name}' configuration updated successfully",
+                                        config=config)
+            
+        except Exception as e:
+            error_msg = f"Error updating profile configuration: {str(e)}"
+            self.log.error(error_msg)
+            return self._error_response(ConfigurationResponse, str(e), config=None)
+    
+    def update_lsfg_script_from_profile_data(self, profile_data: ProfileData) -> ConfigurationResponse:
+        """Update the ~/lsfg-vk-adaptive launch script from profile data
+        
+        Args:
+            profile_data: Profile data to apply to the script
+            
+        Returns:
+            ConfigurationResponse indicating success or failure
+        """
+        try:
+            script_content = self._generate_script_content_for_profile(profile_data)
+            
+            # Write the script file
+            self._write_file(self.lsfg_script_path, script_content, 0o755)
+            
+            self.log.info(f"Updated lsfg launch script at {self.lsfg_script_path} for profile '{profile_data['current_profile']}'")
+            
+            # Get current profile config for response
+            current_config = profile_data["profiles"].get(profile_data["current_profile"], ConfigurationManager.get_defaults())
+            
+            return self._success_response(ConfigurationResponse,
+                                        "Launch script updated successfully",
+                                        config=current_config)
+            
+        except Exception as e:
+            error_msg = f"Error updating launch script: {str(e)}"
+            self.log.error(error_msg)
+            return self._error_response(ConfigurationResponse, str(e), config=None)

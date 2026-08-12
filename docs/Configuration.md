@@ -2,6 +2,8 @@
 
 Configuring lsfg-vk is done either through **lsfg-vk-ui** (graphical interface) or by manually editing the configuration file located at `~/.config/lsfg-vk/conf.toml`.
 
+The Adaptive Decky plugin in this repository uses a separate file, `~/.config/lsfg-vk-adaptive/conf.toml`, selected via `LSFGVK_CONFIG`. That keeps it from overwriting the official 1.x plugin config. The keys are the same v2 schema described below.
+
 Regardless of the method you choose, the concept of profiles remains the same.
 - **Profiles**: Profiles allow you to create different sets of configurations for different applications or use cases. A profile can automatically be selected through the "active_in" property.
 - **Profile Settings**: Settings related to a profile are stored under the "Profile Settings" or `[[profile]]` section.
