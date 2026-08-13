@@ -8,6 +8,7 @@
 #include "swapchain.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -399,7 +400,8 @@ namespace {
                     queue, swapchain,
                     const_cast<void*>(info->pNext),
                     info->pImageIndices[i],
-                    { waitSemaphores.begin(), waitSemaphores.end() }
+                    { waitSemaphores.begin(), waitSemaphores.end() },
+                    info
                 );
             } catch (const ls::vulkan_error& e) {
                 if (e.error() != VK_ERROR_OUT_OF_DATE_KHR)
@@ -441,8 +443,19 @@ namespace {
         if (it == instance_info->devices.end())
             return VK_ERROR_INITIALIZATION_FAILED;
 
-        return it->second.df().AcquireNextImageKHR(device, swapchain, timeout,
+        static std::atomic<uint32_t> acquireLog{0};
+        const uint32_t n = acquireLog.fetch_add(1);
+        if (n < 8)
+            layerLog("lsfg-vk: acquire begin n=" + std::to_string(n));
+
+        auto res = it->second.df().AcquireNextImageKHR(device, swapchain, timeout,
             semaphore, fence, idx);
+
+        if (n < 8)
+            layerLog("lsfg-vk: acquire ok n=" + std::to_string(n)
+                + " res=" + std::to_string(static_cast<int>(res))
+                + " idx=" + (idx ? std::to_string(*idx) : std::string("null")));
+        return res;
     }
 
     VkResult myvkAcquireNextImage2KHR(
@@ -482,6 +495,7 @@ namespace {
 __attribute__((visibility("default")))
 VkResult vkNegotiateLoaderLayerInterfaceVersion(VkNegotiateLayerInterface* pVersionStruct) {
     layerLog("lsfg-vk: vkNegotiate begin");
+    layerLog("lsfg-vk: adaptive build=orig-present-v3");
 
     // ensure loader compatibility
     if (!pVersionStruct

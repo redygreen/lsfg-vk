@@ -63,11 +63,14 @@ namespace lsfgvk::layer {
         /// @param next_chain next chain pointer for the present info (WARN: shared!)
         /// @param imageIdx swapchain image index to present to
         /// @param semaphores semaphores to wait on before presenting
+        /// @param originalInfo original QueuePresent info; used unchanged for Adaptive
+        ///                     passthrough so present fences / pResults stay intact
         /// @throws ls::vulkan_error on vulkan errors
         VkResult present(const vk::Vulkan& vk,
             VkQueue queue, VkSwapchainKHR swapchain,
             void* next_chain, uint32_t imageIdx,
-            const std::vector<VkSemaphore>& semaphores);
+            const std::vector<VkSemaphore>& semaphores,
+            const VkPresentInfoKHR* originalInfo = nullptr);
 
     private:
         /// Choose how many generated frames to insert for Adaptive.
@@ -77,7 +80,8 @@ namespace lsfgvk::layer {
             VkQueue queue, VkSwapchainKHR swapchain,
             void* next_chain, uint32_t imageIdx,
             const std::vector<VkSemaphore>& semaphores,
-            size_t genCount);
+            size_t genCount,
+            const VkPresentInfoKHR* originalInfo);
         void forceFifo(void* next_chain) const;
 
         std::vector<vk::Image> sourceImages;
