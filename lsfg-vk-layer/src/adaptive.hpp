@@ -27,9 +27,8 @@ namespace lsfgvk::layer {
     /// Work time is present-to-present minus the game's acquire wait, so extra
     /// FIFO presents cannot feed back as a fake 45 FPS cap.
     ///
-    /// Accumulates extras (not presents) and clamps the leftover so a 45 Hz game
-    /// at a 90 target stays at genCount=1 instead of flickering 0/1 whenever
-    /// remainder goes negative.
+    /// Accumulates extras so displayed FPS approaches the target: a 47 Hz game
+    /// at 90 should insert ~0.915 extras/frame (43 generated), not a full 2×.
     class AdaptivePacer {
     public:
         using Clock = std::chrono::steady_clock;
@@ -101,7 +100,7 @@ namespace lsfgvk::layer {
             // This frame already met the target: no extras, bleed remainder so a
             // fast frame cannot fire a leftover extra (old error-diffusion bug).
             if (workDt * target <= 1.05) {
-                this->acc = std::clamp(this->acc * 0.35, -0.25, 0.25);
+                this->acc = std::clamp(this->acc * 0.35, 0.0, 0.25);
                 this->lastGenCount = 0;
                 out.acc = this->acc;
                 out.genCount = 0;
@@ -117,21 +116,13 @@ namespace lsfgvk::layer {
 
             const double extrasWant = std::clamp(
                 target * *this->emaDt - 1.0, 0.0, static_cast<double>(maxGen));
-            size_t gen = 0;
-            if (extrasWant >= 0.5) {
-                // Need extras on most frames: hold a stable integer. Mixing 0/1
-                // interpolates against a stale source slot and looks like a
-                // wrong/old generated frame.
-                auto rounded = static_cast<size_t>(std::llround(extrasWant));
-                gen = rounded > maxGen ? maxGen : rounded;
-                this->acc = 0.0;
-            } else {
-                this->acc += extrasWant;
-                if (this->acc >= 1.0) {
-                    gen = 1;
-                    this->acc -= 1.0;
-                }
-            }
+            this->acc += extrasWant;
+            int extra = static_cast<int>(std::floor(this->acc));
+            extra = std::clamp(extra, 0, static_cast<int>(maxGen));
+            this->acc -= static_cast<double>(extra);
+            this->acc = std::clamp(this->acc, 0.0, 0.999);
+
+            const size_t gen = static_cast<size_t>(extra);
             this->lastGenCount = gen;
             out.genCount = gen;
             out.acc = this->acc;

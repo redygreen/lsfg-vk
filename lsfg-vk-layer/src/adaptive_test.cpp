@@ -63,11 +63,11 @@ int main() {
         pacer.markPresentReturned(t0);
 
         auto s = step(pacer, 90, t0 + 22ms);
-        expect(s.genCount == 1, "45 Hz work at 90 target generates 1");
+        expect(s.genCount == 0, "first 22 ms at 90 banks a 0.98 extra");
         pacer.markPresentReturned(t0 + 22ms);
 
         s = step(pacer, 90, t0 + 44ms);
-        expect(s.genCount == 1, "stable 45 Hz work stays at 1");
+        expect(s.genCount == 1, "remainder then inserts the extra");
     }
 
     {
@@ -134,10 +134,17 @@ int main() {
     {
         AdaptivePacer pacer;
         pacer.markPresentReturned(t0);
-        auto t = t0 + 22ms;
-        expect(step(pacer, 90, t).genCount == 1, "start at 1");
+        using namespace std::chrono;
+        auto t = t0 + duration_cast<Clock::duration>(duration<double>(1.0 / 45.0));
+        (void)step(pacer, 90, t);
         pacer.markPresentReturned(t);
-        t += 22ms;
+        t += duration_cast<Clock::duration>(duration<double>(1.0 / 45.0));
+        expect(step(pacer, 90, t).genCount == 1, "exact 45 Hz settles at 1 extra");
+        pacer.markPresentReturned(t);
+        t += duration_cast<Clock::duration>(duration<double>(1.0 / 45.0));
+        (void)step(pacer, 120, t);
+        pacer.markPresentReturned(t);
+        t += duration_cast<Clock::duration>(duration<double>(1.0 / 45.0));
         expect(step(pacer, 120, t).genCount == 2, "120 target steps to 2");
         pacer.markPresentReturned(t);
         for (int i = 0; i < 6; ++i) {
@@ -151,20 +158,14 @@ int main() {
     {
         const auto [mean90, frac90] = meanGen(90, 22.222, 90);
         expect(mean90 > 0.9 && mean90 < 1.1, "45 Hz game at 90 target averages ~1 extra");
-        expect(frac90 > 0.98, "45 Hz game at 90 target does not flicker extras off");
+        expect(frac90 > 0.98, "exact 45 Hz at 90 is a full extra every frame");
 
-        AdaptivePacer sticky;
-        auto t = t0;
-        sticky.markPresentReturned(t);
-        int dropped = 0;
-        for (int i = 0; i < 60; ++i) {
-            t += 22ms;
-            const auto s = step(sticky, 90, t);
-            sticky.markPresentReturned(t);
-            if (i >= 2 && s.genCount != 1)
-                ++dropped;
-        }
-        expect(dropped == 0, "trained 22 ms / 90 target never drops to genCount 0");
+        const auto [mean47, frac47] = meanGen(90, 1000.0 / 47.0, 140);
+        const double extras47 = 90.0 / 47.0 - 1.0;
+        expect(std::abs(mean47 - extras47) < 0.06,
+            "47 Hz game at 90 target averages ~0.915 extras (43 generated, not 47)");
+        expect(frac47 > 0.85 && frac47 < 0.97,
+            "47 Hz game at 90 target skips extras on some frames");
 
         const auto [mean60, frac60] = meanGen(60, 22.222, 90);
         expect(std::abs(mean60 - 1.0 / 3.0) < 0.12,
@@ -173,8 +174,10 @@ int main() {
             "45 Hz game at 60 target inserts extras on some frames");
 
         const auto [mean70, frac70] = meanGen(70, 22.222, 90);
-        expect(mean70 > 0.9 && frac70 > 0.98,
-            "45 Hz game at 70 target sticks to 2x instead of 0/1 flicker");
+        expect(std::abs(mean70 - (70.0 / 45.0 - 1.0)) < 0.12,
+            "45 Hz game at 70 target averages ~0.56 extras");
+        expect(frac70 > 0.4 && frac70 < 0.75,
+            "45 Hz game at 70 target mixes extras instead of full 2x");
 
         const auto [mean50, _] = meanGen(50, 22.222, 90);
         expect(mean50 > 0.02 && mean50 < 0.25,
