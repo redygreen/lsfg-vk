@@ -138,7 +138,7 @@ CONFIG_SCHEMA_DEF = {
         "name": "enable_wsi",
         "fieldType": ConfigFieldType.BOOLEAN,
         "default": False,
-        "description": "Enable Gamescope WSI Layer, disable if frame generation isn't applying or isn't feeling smooth (use with HDR off)",
+        "description": "Leave off on Steam Deck. Gamescope WSI coalesces extra+real presents: overlay shows generated FPS but motion stays at real FPS.",
         "location": "script"
     },
 
