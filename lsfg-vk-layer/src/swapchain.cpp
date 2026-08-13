@@ -179,8 +179,9 @@ VkResult Swapchain::present(const vk::Vulkan& vk,
     const size_t genCount = this->profile.adaptive
         ? chooseGeneratedCount()
         : this->destinationImages.size();
-    if (this->profile.adaptive && this->fidx == 0) {
-        layerLog("lsfg-vk: first adaptive present genCount=" + std::to_string(genCount));
+    if (this->profile.adaptive && this->fidx < 8) {
+        layerLog("lsfg-vk: adaptive present fidx=" + std::to_string(this->fidx)
+            + " genCount=" + std::to_string(genCount));
     }
     return presentGenerated(vk, queue, swapchain, next_chain, imageIdx, semaphores, genCount);
 }
@@ -197,6 +198,28 @@ VkResult Swapchain::presentGenerated(const vk::Vulkan& vk,
         this->instance.get().scheduleFrames(this->ctx.get(), genCount);
     } catch (const std::exception& e) {
         throw ls::error("failed to schedule frames", e);
+    }
+
+    // Game already at/above target (or first frame): present exactly as the
+    // application asked. Copying the swapchain image and replacing wait
+    // semaphores deadlocked the next acquire on Steam Deck.
+    if (genCount == 0) {
+        const VkPresentInfoKHR presentInfo{
+            .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+            .pNext = next_chain,
+            .waitSemaphoreCount = static_cast<uint32_t>(semaphores.size()),
+            .pWaitSemaphores = semaphores.empty() ? nullptr : semaphores.data(),
+            .swapchainCount = 1,
+            .pSwapchains = &swapchain,
+            .pImageIndices = &imageIdx,
+        };
+        auto res = vk.df().QueuePresentKHR(queue, &presentInfo);
+        if (res != VK_SUCCESS && res != VK_SUBOPTIMAL_KHR)
+            throw ls::vulkan_error(res, "vkQueuePresentKHR() failed");
+        if (this->fidx < 8)
+            layerLog("lsfg-vk: adaptive passthrough present ok");
+        this->fidx++;
+        return res;
     }
 
     forceFifo(next_chain);
@@ -240,37 +263,6 @@ VkResult Swapchain::presentGenerated(const vk::Vulkan& vk,
 
     cmdbuf.end(vk);
 
-    // No extra frames: copy into the FG source ring, then present the real
-    // image with a semaphore wait. Do not CPU-wait a fence and present with
-    // zero wait semaphores — that also used to call submit() with an empty
-    // signal list, which crashed on vector::back().
-    if (genCount == 0) {
-        auto& pcs = this->postCopySemaphores.at(
-            this->idx % this->postCopySemaphores.size());
-        cmdbuf.submit(vk,
-            semaphores, VK_NULL_HANDLE, 0,
-            { pcs.first.handle() }, VK_NULL_HANDLE, 0
-        );
-
-        const VkPresentInfoKHR presentInfo{
-            .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
-            .pNext = next_chain,
-            .waitSemaphoreCount = 1,
-            .pWaitSemaphores = &pcs.first.handle(),
-            .swapchainCount = 1,
-            .pSwapchains = &swapchain,
-            .pImageIndices = &imageIdx,
-        };
-        auto res = vk.df().QueuePresentKHR(queue, &presentInfo);
-        if (res != VK_SUCCESS && res != VK_SUBOPTIMAL_KHR)
-            throw ls::vulkan_error(res, "vkQueuePresentKHR() failed");
-
-        layerLog("lsfg-vk: adaptive passthrough present ok");
-        this->idx++;
-        this->fidx++;
-        return res;
-    }
-
     cmdbuf.submit(vk,
         semaphores, VK_NULL_HANDLE, 0,
         {}, this->syncSemaphore->handle(), this->idx++
@@ -282,6 +274,8 @@ VkResult Swapchain::presentGenerated(const vk::Vulkan& vk,
         auto& pass = this->passes.at(i);
 
         uint32_t aqImageIdx{};
+        if (this->fidx < 8)
+            layerLog("lsfg-vk: adaptive acquire generated i=" + std::to_string(i));
         auto res = vk.df().AcquireNextImageKHR(vk.dev(), swapchain,
             UINT64_MAX, pass.acquireSemaphore.handle(),
             VK_NULL_HANDLE,
