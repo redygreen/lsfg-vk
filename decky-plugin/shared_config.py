@@ -50,7 +50,7 @@ CONFIG_SCHEMA_DEF = {
         "name": "adaptive",
         "fieldType": ConfigFieldType.BOOLEAN,
         "default": False,
-        "description": "present on a target-FPS clock instead of a fixed multiplier",
+        "description": "generate extra frames during present to approach target_fps (multiplier is a ceiling)",
         "location": "toml"
     },
 

@@ -16,8 +16,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
-#include <mutex>
-#include <optional>
+#include <iostream>
 #include <utility>
 #include <vector>
 
@@ -132,351 +131,63 @@ Swapchain::Swapchain(const vk::Vulkan& vk, backend::Instance& backend,
     }
 
     if (this->profile.adaptive) {
-        const VkImageUsageFlags usage = this->info.imageUsage
-            | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT
-            | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-        const size_t virtualCount = std::max<size_t>(this->info.images.size(), 3);
-        this->virtualImages.reserve(virtualCount);
-        for (size_t i = 0; i < virtualCount; i++) {
-            this->virtualImages.emplace_back(vk, extent, this->info.format, usage);
-            this->availableVirtual.push_back(static_cast<uint32_t>(i));
-        }
-
-        this->pacerVk = &vk;
-        this->running = true;
-        this->pacer = std::thread(&Swapchain::pacerMain, this);
+        std::cerr << "lsfg-vk: adaptive mode presents on the game thread "
+            << "(target_fps=" << this->profile.target_fps
+            << ", multiplier ceiling=" << this->profile.multiplier << ")\n";
     }
 }
 
-Swapchain::~Swapchain() {
-    this->running = false;
-    this->pacerCv.notify_all();
-    if (this->pacer.joinable())
-        this->pacer.join();
-}
+size_t Swapchain::chooseGeneratedCount() {
+    const size_t maxGen = this->destinationImages.size();
+    const double targetFps = std::max(1.0, static_cast<double>(this->profile.target_fps));
+    const auto now = SteadyClock::now();
 
-VkResult Swapchain::getSwapchainImages(uint32_t* count, VkImage* images) const {
-    const uint32_t n = static_cast<uint32_t>(this->virtualImages.size());
-    if (images == nullptr) {
-        *count = n;
-        return VK_SUCCESS;
-    }
-    if (*count < n) {
-        *count = n;
-        return VK_INCOMPLETE;
-    }
-    for (uint32_t i = 0; i < n; i++)
-        images[i] = this->virtualImages.at(i).handle();
-    *count = n;
-    return VK_SUCCESS;
-}
-
-VkResult Swapchain::acquireNextImage(const vk::Vulkan& vk, uint64_t timeout,
-        VkSemaphore semaphore, VkFence fence, uint32_t* idx) {
-    std::unique_lock lock(this->pacerMutex);
-    const auto pred = [this] {
-        return !this->availableVirtual.empty() || !this->running.load();
-    };
-
-    if (timeout == 0) {
-        if (!pred())
-            return VK_NOT_READY;
-    } else if (timeout == UINT64_MAX) {
-        this->pacerCv.wait(lock, pred);
-    } else {
-        if (!this->pacerCv.wait_for(lock, std::chrono::nanoseconds(timeout), pred))
-            return VK_TIMEOUT;
+    if (!this->lastPresentTime.has_value()) {
+        this->lastPresentTime = now;
+        this->adaptiveError = 0.0;
+        return 0;
     }
 
-    if (!this->running.load())
-        return VK_ERROR_OUT_OF_DATE_KHR;
-    if (this->availableVirtual.empty())
-        return VK_NOT_READY;
+    const double elapsed = std::chrono::duration<double>(now - *this->lastPresentTime).count();
+    this->lastPresentTime = now;
 
-    *idx = this->availableVirtual.front();
-    this->availableVirtual.erase(this->availableVirtual.begin());
-    lock.unlock();
+    // Ignore hitches and implausibly fast presents; passthrough the real frame.
+    if (elapsed < 0.0005 || elapsed > 0.100) {
+        this->adaptiveError = 0.0;
+        return 0;
+    }
 
-    if (semaphore == VK_NULL_HANDLE && fence == VK_NULL_HANDLE)
-        return VK_SUCCESS;
+    double desired = targetFps * elapsed - 1.0 + this->adaptiveError;
+    if (desired < 0.0)
+        desired = 0.0;
 
-    const VkSubmitInfo submitInfo{
-        .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-        .signalSemaphoreCount = semaphore ? 1u : 0u,
-        .pSignalSemaphores = semaphore ? &semaphore : nullptr
-    };
-    std::scoped_lock qlock(this->queueMutex);
-    auto res = vk.df().QueueSubmit(vk.queue(), 1, &submitInfo, fence);
-    if (res != VK_SUCCESS)
-        throw ls::vulkan_error(res, "vkQueueSubmit() failed");
-    return VK_SUCCESS;
+    auto gen = static_cast<size_t>(std::llround(desired));
+    if (gen > maxGen)
+        gen = maxGen;
+
+    this->adaptiveError = desired - static_cast<double>(gen);
+    if (gen == maxGen && this->adaptiveError > 0.0)
+        this->adaptiveError = 0.0;
+    return gen;
 }
 
 VkResult Swapchain::present(const vk::Vulkan& vk,
         VkQueue queue, VkSwapchainKHR swapchain,
         void* next_chain, uint32_t imageIdx,
         const std::vector<VkSemaphore>& semaphores) {
-    this->realSwapchain = swapchain;
-    this->presentQueue = queue;
-    this->pacerVk = &vk;
-
-    if (this->profile.adaptive)
-        return presentAdaptive(vk, queue, imageIdx, semaphores);
-    return presentFixed(vk, queue, swapchain, next_chain, imageIdx, semaphores);
+    const size_t genCount = this->profile.adaptive
+        ? chooseGeneratedCount()
+        : this->destinationImages.size();
+    return presentGenerated(vk, queue, swapchain, next_chain, imageIdx, semaphores, genCount);
 }
 
-VkResult Swapchain::presentAdaptive(const vk::Vulkan& vk,
-        VkQueue /*queue*/, uint32_t imageIdx,
-        const std::vector<VkSemaphore>& semaphores) {
-    if (imageIdx >= this->virtualImages.size())
-        throw ls::error("adaptive present of unknown virtual image");
-
-    const auto& virtualImage = this->virtualImages.at(imageIdx);
-    const auto& sourceImage = this->sourceImages.at(this->fidx % 2);
-
-    if (this->fidx && !this->copyFence->wait(vk, 2ULL * 1000 * 1000 * 1000))
-        throw ls::vulkan_error(VK_TIMEOUT, "vkWaitForFences() failed");
-    this->copyFence->reset(vk);
-
-    const auto& cmdbuf = *this->renderCommandBuffer;
-    cmdbuf.begin(vk);
-    cmdbuf.blitImage(vk,
-        {
-            barrierHelper(virtualImage.handle(),
-                VK_ACCESS_NONE,
-                VK_ACCESS_TRANSFER_READ_BIT,
-                VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL
-            ),
-            barrierHelper(sourceImage.handle(),
-                VK_ACCESS_NONE,
-                VK_ACCESS_TRANSFER_WRITE_BIT,
-                VK_IMAGE_LAYOUT_UNDEFINED,
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL
-            ),
-        },
-        { virtualImage.handle(), sourceImage.handle() },
-        sourceImage.getExtent(),
-        {
-            barrierHelper(virtualImage.handle(),
-                VK_ACCESS_TRANSFER_READ_BIT,
-                VK_ACCESS_MEMORY_READ_BIT,
-                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
-            ),
-        }
-    );
-    cmdbuf.end(vk);
-
-    {
-        std::scoped_lock qlock(this->queueMutex);
-        cmdbuf.submit(vk,
-            semaphores, VK_NULL_HANDLE, 0,
-            {}, VK_NULL_HANDLE, 0,
-            this->copyFence->handle()
-        );
-    }
-    if (!this->copyFence->wait(vk, 2ULL * 1000 * 1000 * 1000))
-        throw ls::vulkan_error(VK_TIMEOUT, "vkWaitForFences() failed");
-
-    const RealFrame frame{
-        .fidx = this->fidx,
-        .t = SteadyClock::now()
-    };
-    this->fidx++;
-
-    {
-        std::scoped_lock lock(this->pacerMutex);
-        this->pendingFrames.push_back(frame);
-        this->availableVirtual.push_back(imageIdx);
-    }
-    this->pacerCv.notify_all();
-
-    if (this->pacerStatus.load() != VK_SUCCESS)
-        return this->pacerStatus.load();
-    return VK_SUCCESS;
-}
-
-void Swapchain::pacerMain() noexcept {
-    try {
-        const double targetFps = std::max(1.0F, this->profile.target_fps);
-        const auto targetDt = std::chrono::duration<double>(1.0 / targetFps);
-        auto next = SteadyClock::now();
-
-        std::optional<RealFrame> prev;
-        std::optional<RealFrame> curr;
-        size_t gensThisPair{0};
-        bool presentedCurr{false};
-        bool prepassReady{false};
-        const size_t maxGen = this->destinationImages.size();
-
-        while (this->running.load()) {
-            {
-                std::unique_lock lock(this->pacerMutex);
-                this->pacerCv.wait_until(lock, next, [this] {
-                    return !this->running.load();
-                });
-            }
-            if (!this->running.load())
-                break;
-
-            {
-                std::scoped_lock lock(this->pacerMutex);
-                while (!this->pendingFrames.empty()) {
-                    prev = curr;
-                    curr = this->pendingFrames.front();
-                    this->pendingFrames.pop_front();
-                    gensThisPair = 0;
-                    presentedCurr = false;
-                    prepassReady = false;
-                }
-            }
-
-            const auto now = SteadyClock::now();
-            if (this->pacerVk && this->presentQueue && this->realSwapchain && curr) {
-                const vk::Vulkan& vk = *this->pacerVk;
-                auto presentSrc = [&](size_t realFidx) {
-                    presentOutput(vk, this->sourceImages.at(realFidx % 2).handle(),
-                        VK_NULL_HANDLE, 0, false);
-                };
-
-                if (!prev) {
-                    if (!presentedCurr) {
-                        presentSrc(curr->fidx);
-                        presentedCurr = true;
-                    }
-                } else {
-                    const double pairDt = std::chrono::duration<double>(curr->t - prev->t).count();
-                    if (pairDt < 0.0005 || pairDt > 0.100) {
-                        if (!presentedCurr) {
-                            presentSrc(curr->fidx);
-                            presentedCurr = true;
-                        }
-                    } else {
-                        const double alpha = std::chrono::duration<double>(now - curr->t).count()
-                            / pairDt;
-                        if (alpha >= 1.0 || gensThisPair >= maxGen) {
-                            if (!presentedCurr) {
-                                presentSrc(curr->fidx);
-                                presentedCurr = true;
-                            }
-                        } else if (alpha > 0.001) {
-                            if (!prepassReady) {
-                                this->instance.get().schedulePrepass(this->ctx.get(), curr->fidx);
-                                prepassReady = true;
-                            }
-                            const uint64_t sig = this->instance.get().scheduleOne(
-                                this->ctx.get(), static_cast<float>(alpha));
-                            presentOutput(vk, this->destinationImages.at(0).handle(),
-                                this->syncSemaphore->handle(), sig, true);
-                            gensThisPair++;
-                        }
-                    }
-                }
-            }
-
-            next += std::chrono::duration_cast<SteadyClock::duration>(targetDt);
-            if (now > next + std::chrono::duration_cast<SteadyClock::duration>(targetDt))
-                next = now;
-        }
-    } catch (const ls::vulkan_error& e) {
-        this->pacerStatus = e.error();
-    } catch (...) {
-        this->pacerStatus = VK_ERROR_UNKNOWN;
-    }
-}
-
-void Swapchain::presentOutput(const vk::Vulkan& vk, VkImage src,
-        VkSemaphore waitTimeline, uint64_t waitValue, bool waitTimelineValid) {
-    if (this->passes.empty())
-        throw ls::error("adaptive present requires at least one render pass");
-
-    auto& pass = this->passes.at(0);
-    auto& pcs = this->postCopySemaphores.at(this->idx % this->postCopySemaphores.size());
-
-    if (this->idx > 1 && !this->renderFence->wait(vk, 2ULL * 1000 * 1000 * 1000))
-        throw ls::vulkan_error(VK_TIMEOUT, "vkWaitForFences() failed");
-    this->renderFence->reset(vk);
-
-    uint32_t aqImageIdx{};
-    auto res = vk.df().AcquireNextImageKHR(vk.dev(), this->realSwapchain,
-        100ULL * 1000 * 1000, pass.acquireSemaphore.handle(),
-        VK_NULL_HANDLE,
-        &aqImageIdx
-    );
-    if (res == VK_TIMEOUT || res == VK_NOT_READY)
-        return;
-    if (res != VK_SUCCESS && res != VK_SUBOPTIMAL_KHR)
-        throw ls::vulkan_error(res, "vkAcquireNextImageKHR() failed");
-
-    const auto& realImage = this->info.images.at(aqImageIdx);
-    auto& cmdbuf = pass.commandBuffer;
-    cmdbuf.begin(vk);
-    cmdbuf.blitImage(vk,
-        {
-            barrierHelper(src,
-                waitTimelineValid ? VK_ACCESS_NONE : VK_ACCESS_TRANSFER_WRITE_BIT,
-                VK_ACCESS_TRANSFER_READ_BIT,
-                waitTimelineValid ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL
-                    : VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL
-            ),
-            barrierHelper(realImage,
-                VK_ACCESS_NONE,
-                VK_ACCESS_TRANSFER_WRITE_BIT,
-                VK_IMAGE_LAYOUT_UNDEFINED,
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL
-            ),
-        },
-        { src, realImage },
-        this->info.extent,
-        {
-            barrierHelper(realImage,
-                VK_ACCESS_TRANSFER_WRITE_BIT,
-                VK_ACCESS_MEMORY_READ_BIT,
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
-            ),
-        }
-    );
-    cmdbuf.end(vk);
-
-    const std::vector<VkSemaphore> waitSemaphores{ pass.acquireSemaphore.handle() };
-    const std::vector<VkSemaphore> signalSemaphores{ pcs.first.handle() };
-
-    {
-        std::scoped_lock qlock(this->queueMutex);
-        cmdbuf.submit(vk,
-            waitSemaphores,
-            waitTimelineValid ? waitTimeline : VK_NULL_HANDLE,
-            waitTimelineValid ? waitValue : 0,
-            signalSemaphores, VK_NULL_HANDLE, 0,
-            this->renderFence->handle()
-        );
-
-        const VkPresentInfoKHR presentInfo{
-            .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
-            .waitSemaphoreCount = 1,
-            .pWaitSemaphores = &pcs.first.handle(),
-            .swapchainCount = 1,
-            .pSwapchains = &this->realSwapchain,
-            .pImageIndices = &aqImageIdx,
-        };
-        res = vk.df().QueuePresentKHR(this->presentQueue, &presentInfo);
-    }
-    if (res != VK_SUCCESS && res != VK_SUBOPTIMAL_KHR)
-        throw ls::vulkan_error(res, "vkQueuePresentKHR() failed");
-
-    this->idx++;
-}
-
-VkResult Swapchain::presentFixed(const vk::Vulkan& vk,
+VkResult Swapchain::presentGenerated(const vk::Vulkan& vk,
         VkQueue queue, VkSwapchainKHR swapchain,
         void* next_chain, uint32_t imageIdx,
-        const std::vector<VkSemaphore>& semaphores) {
+        const std::vector<VkSemaphore>& semaphores,
+        size_t genCount) {
     const auto& swapchainImage = this->info.images.at(imageIdx);
     const auto& sourceImage = this->sourceImages.at(this->fidx % 2);
-    const size_t genCount = this->destinationImages.size();
 
     try {
         this->instance.get().scheduleFrames(this->ctx.get(), genCount);
@@ -486,9 +197,12 @@ VkResult Swapchain::presentFixed(const vk::Vulkan& vk,
 
     forceFifo(next_chain);
 
-    if (this->fidx && !this->renderFence->wait(vk, 150ULL * 1000 * 1000))
-        throw ls::vulkan_error(VK_TIMEOUT, "vkWaitForFences() failed");
-    this->renderFence->reset(vk);
+    if (this->renderFenceInFlight) {
+        if (!this->renderFence->wait(vk, 150ULL * 1000 * 1000))
+            throw ls::vulkan_error(VK_TIMEOUT, "vkWaitForFences() failed");
+        this->renderFence->reset(vk);
+        this->renderFenceInFlight = false;
+    }
 
     const auto& cmdbuf = *this->renderCommandBuffer;
     cmdbuf.begin(vk);
@@ -521,6 +235,34 @@ VkResult Swapchain::presentFixed(const vk::Vulkan& vk,
     );
 
     cmdbuf.end(vk);
+
+    // No extra frames: copy into the FG source ring, then present the real image
+    // on this same (game) thread. Steam Deck WSI is not safe from a second thread.
+    if (genCount == 0) {
+        this->copyFence->reset(vk);
+        cmdbuf.submit(vk,
+            semaphores, VK_NULL_HANDLE, 0,
+            {}, VK_NULL_HANDLE, 0,
+            this->copyFence->handle()
+        );
+        if (!this->copyFence->wait(vk, 2ULL * 1000 * 1000 * 1000))
+            throw ls::vulkan_error(VK_TIMEOUT, "vkWaitForFences() failed");
+
+        const VkPresentInfoKHR presentInfo{
+            .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+            .pNext = next_chain,
+            .swapchainCount = 1,
+            .pSwapchains = &swapchain,
+            .pImageIndices = &imageIdx,
+        };
+        auto res = vk.df().QueuePresentKHR(queue, &presentInfo);
+        if (res != VK_SUCCESS && res != VK_SUBOPTIMAL_KHR)
+            throw ls::vulkan_error(res, "vkQueuePresentKHR() failed");
+
+        this->fidx++;
+        return res;
+    }
+
     cmdbuf.submit(vk,
         semaphores, VK_NULL_HANDLE, 0,
         {}, this->syncSemaphore->handle(), this->idx++
@@ -542,10 +284,10 @@ VkResult Swapchain::presentFixed(const vk::Vulkan& vk,
 
         const auto& aquiredSwapchainImage = this->info.images.at(aqImageIdx);
 
-        auto& cmdbuf = pass.commandBuffer;
-        cmdbuf.begin(vk);
+        auto& passCmd = pass.commandBuffer;
+        passCmd.begin(vk);
 
-        cmdbuf.blitImage(vk,
+        passCmd.blitImage(vk,
             {
                 barrierHelper(destinationImage.handle(),
                     VK_ACCESS_NONE,
@@ -574,7 +316,8 @@ VkResult Swapchain::presentFixed(const vk::Vulkan& vk,
 
         std::vector<VkSemaphore> waitSemaphores{ pass.acquireSemaphore.handle() };
         if (i) {
-            const auto& prevPCS = this->postCopySemaphores.at((this->idx - 1) % this->postCopySemaphores.size());
+            const auto& prevPCS = this->postCopySemaphores.at(
+                (this->idx - 1) % this->postCopySemaphores.size());
             waitSemaphores.push_back(prevPCS.second.handle());
         }
 
@@ -583,12 +326,14 @@ VkResult Swapchain::presentFixed(const vk::Vulkan& vk,
             pcs.second.handle()
         };
 
-        cmdbuf.end(vk);
-        cmdbuf.submit(vk,
+        passCmd.end(vk);
+        passCmd.submit(vk,
             waitSemaphores, this->syncSemaphore->handle(), this->idx,
             signalSemaphores, VK_NULL_HANDLE, 0,
             i == genCount - 1 ? this->renderFence->handle() : VK_NULL_HANDLE
         );
+        if (i == genCount - 1)
+            this->renderFenceInFlight = true;
 
         const VkPresentInfoKHR presentInfo{
             .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,

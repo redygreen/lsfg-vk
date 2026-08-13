@@ -430,10 +430,6 @@ namespace {
         if (it == instance_info->devices.end())
             return VK_ERROR_INITIALIZATION_FAILED;
 
-        if (auto* context = layer_info->root.tryGetSwapchainContext(swapchain);
-                context && context->usesVirtualSwapchain())
-            return context->getSwapchainImages(count, images);
-
         return it->second.df().GetSwapchainImagesKHR(device, swapchain, count, images);
     }
 
@@ -447,17 +443,6 @@ namespace {
         const auto& it = instance_info->devices.find(device);
         if (it == instance_info->devices.end())
             return VK_ERROR_INITIALIZATION_FAILED;
-
-        if (auto* context = layer_info->root.tryGetSwapchainContext(swapchain);
-                context && context->usesVirtualSwapchain()) {
-            try {
-                return context->acquireNextImage(it->second, timeout, semaphore, fence, idx);
-            } catch (const ls::vulkan_error& e) {
-                return e.error();
-            } catch (const std::exception&) {
-                return VK_ERROR_UNKNOWN;
-            }
-        }
 
         return it->second.df().AcquireNextImageKHR(device, swapchain, timeout,
             semaphore, fence, idx);

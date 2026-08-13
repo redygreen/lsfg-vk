@@ -48,7 +48,7 @@ To rebuild the zip after changing the plugin or layer:
 
 Do **not** also add `~/lsfg %command%` on the same game. After updating the plugin zip, open LSFG Adaptive and click **Install** again so the layer is moved into the private tree and `~/lsfg-vk-adaptive` is rewritten.
 
-If a game black-screens and exits: turn **Adaptive** off, keep Max Multiplier at 2×, and restart the game. Adaptive on Gamescope is still experimental.
+Adaptive uses the same present path as Fixed (game thread). Cap the game below Target FPS so there is room to generate frames. Restart the game after toggling Adaptive.
 
 ## License
 

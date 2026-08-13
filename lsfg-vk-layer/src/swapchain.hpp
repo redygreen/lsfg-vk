@@ -12,14 +12,10 @@
 #include "lsfg-vk-common/vulkan/timeline_semaphore.hpp"
 #include "lsfg-vk-common/vulkan/vulkan.hpp"
 
-#include <atomic>
 #include <chrono>
-#include <condition_variable>
+#include <cstddef>
 #include <cstdint>
-#include <deque>
-#include <mutex>
 #include <optional>
-#include <thread>
 #include <utility>
 #include <vector>
 
@@ -59,7 +55,7 @@ namespace lsfgvk::layer {
         Swapchain& operator=(const Swapchain&) = delete;
         Swapchain(Swapchain&&) = delete;
         Swapchain& operator=(Swapchain&&) = delete;
-        ~Swapchain();
+        ~Swapchain() = default;
 
         /// present a frame
         /// @param vk vulkan instance
@@ -73,38 +69,19 @@ namespace lsfgvk::layer {
             void* next_chain, uint32_t imageIdx,
             const std::vector<VkSemaphore>& semaphores);
 
-        /// whether the game sees virtual swapchain images
-        [[nodiscard]] bool usesVirtualSwapchain() const { return this->profile.adaptive; }
-
-        /// reimplement vkGetSwapchainImagesKHR for the virtual swapchain
-        VkResult getSwapchainImages(uint32_t* count, VkImage* images) const;
-
-        /// reimplement vkAcquireNextImageKHR for the virtual swapchain
-        VkResult acquireNextImage(const vk::Vulkan& vk, uint64_t timeout,
-            VkSemaphore semaphore, VkFence fence, uint32_t* idx);
     private:
-        struct RealFrame {
-            size_t fidx{};
-            std::chrono::steady_clock::time_point t{};
-        };
-
+        /// Choose how many generated frames to insert for Adaptive.
+        /// Uses the real-frame interval vs target_fps; multiplier is a ceiling.
         [[nodiscard]] size_t chooseGeneratedCount();
-        VkResult presentFixed(const vk::Vulkan& vk,
+        VkResult presentGenerated(const vk::Vulkan& vk,
             VkQueue queue, VkSwapchainKHR swapchain,
             void* next_chain, uint32_t imageIdx,
-            const std::vector<VkSemaphore>& semaphores);
-        VkResult presentAdaptive(const vk::Vulkan& vk,
-            VkQueue queue, uint32_t imageIdx,
-            const std::vector<VkSemaphore>& semaphores);
-
-        void pacerMain() noexcept;
-        void presentOutput(const vk::Vulkan& vk, VkImage src,
-            VkSemaphore waitTimeline, uint64_t waitValue, bool waitTimelineValid);
+            const std::vector<VkSemaphore>& semaphores,
+            size_t genCount);
         void forceFifo(void* next_chain) const;
 
         std::vector<vk::Image> sourceImages;
         std::vector<vk::Image> destinationImages;
-        std::vector<vk::Image> virtualImages;
         ls::lazy<vk::TimelineSemaphore> syncSemaphore;
 
         ls::lazy<vk::CommandBuffer> renderCommandBuffer;
@@ -127,18 +104,7 @@ namespace lsfgvk::layer {
 
         std::optional<std::chrono::steady_clock::time_point> lastPresentTime;
         double adaptiveError{0.0};
-
-        std::mutex queueMutex;
-        std::mutex pacerMutex;
-        std::condition_variable pacerCv;
-        std::deque<RealFrame> pendingFrames;
-        std::vector<uint32_t> availableVirtual;
-        std::atomic_bool running{false};
-        std::atomic<VkResult> pacerStatus{VK_SUCCESS};
-        std::thread pacer;
-        VkQueue presentQueue{VK_NULL_HANDLE};
-        VkSwapchainKHR realSwapchain{VK_NULL_HANDLE};
-        const vk::Vulkan* pacerVk{nullptr};
+        bool renderFenceInFlight{false};
     };
 
 }

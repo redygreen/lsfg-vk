@@ -56,7 +56,7 @@ export const CONFIG_SCHEMA: Record<string, ConfigField> = {
     name: "adaptive",
     fieldType: ConfigFieldType.BOOLEAN,
     default: false,
-    description: "present on a target-FPS clock instead of a fixed multiplier"
+    description: "generate extra frames during present to approach target_fps (multiplier is a ceiling)"
   },
   target_fps: {
     name: "target_fps",
