@@ -133,7 +133,8 @@ Swapchain::Swapchain(const vk::Vulkan& vk, backend::Instance& backend,
     if (this->profile.adaptive) {
         std::cerr << "lsfg-vk: adaptive mode presents on the game thread "
             << "(target_fps=" << this->profile.target_fps
-            << ", multiplier ceiling=" << this->profile.multiplier << ")\n";
+            << ", multiplier ceiling=" << this->profile.multiplier << ")"
+            << std::endl;
     }
 }
 
@@ -178,6 +179,10 @@ VkResult Swapchain::present(const vk::Vulkan& vk,
     const size_t genCount = this->profile.adaptive
         ? chooseGeneratedCount()
         : this->destinationImages.size();
+    if (this->profile.adaptive && this->fidx == 0) {
+        std::cerr << "lsfg-vk: first adaptive present genCount=" << genCount
+            << std::endl;
+    }
     return presentGenerated(vk, queue, swapchain, next_chain, imageIdx, semaphores, genCount);
 }
 

@@ -17,7 +17,7 @@ This matches how [decky-lsfg-vk-experimental](https://github.com/eugeniosegala/d
 - Installs this fork's v2 Vulkan layer into `~/.local/share/decky-lsfg-vk-adaptive` without touching official 1.x files.
 - On Install, also removes leftover Adaptive files from the global Vulkan path (`~/.local/lib/liblsfg-vk-layer.so` and `~/.local/share/vulkan/implicit_layer.d/VkLayer_LSFGVK_frame_generation.json`) if an earlier zip put them there.
 - Writes Adaptive-aware v2 TOML (`adaptive`, `target_fps`, `allow_fp16`, `multiplier` as a ceiling).
-- Creates `~/lsfg-vk-adaptive`, which sets `VK_IMPLICIT_LAYER_PATH`, `LSFGVK_CONFIG`, and `LSFGVK_PROFILE`.
+- Creates `~/lsfg-vk-adaptive`, which sets `VK_IMPLICIT_LAYER_PATH`, `LSFGVK_CONFIG`, and `LSFGVK_PROFILE`. Game stderr (including lsfg-vk) is written to `~/.config/lsfg-vk-adaptive/lsfg-vk.log`.
 - Keeps the original Deck workarounds (WSI off by default, WOW64, vkBasalt, Zink, DXVK cap).
 
 HDR mode and experimental present-mode toggles from the 1.x plugin are omitted: v2 infers HDR from the swapchain format.

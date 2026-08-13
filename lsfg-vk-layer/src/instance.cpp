@@ -55,16 +55,16 @@ Root::Root() {
     std::cerr << "lsfg-vk: using profile with name '" << this->active_profile->name << "' ";
     switch (profile->first) {
         case ls::IdentType::OVERRIDE:
-            std::cerr << "(identified via override)\n";
+            std::cerr << "(identified via override)" << std::endl;
             break;
         case ls::IdentType::EXECUTABLE:
-            std::cerr << "(identified via executable)\n";
+            std::cerr << "(identified via executable)" << std::endl;
             break;
         case ls::IdentType::WINE_EXECUTABLE:
-            std::cerr << "(identified via wine executable)\n";
+            std::cerr << "(identified via wine executable)" << std::endl;
             break;
         case ls::IdentType::PROCESS_NAME:
-            std::cerr << "(identified via process name)\n";
+            std::cerr << "(identified via process name)" << std::endl;
             break;
     }
 }

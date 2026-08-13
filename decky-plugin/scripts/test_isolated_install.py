@@ -76,6 +76,8 @@ def test_wrapper_sets_isolated_layer_path():
         assert "export LSFGVK_CONFIG=" in script
         assert "lsfg-vk-adaptive" in str(service.config_file_path)
         assert f"export LSFGVK_PROFILE={DEFAULT_PROFILE_NAME}" in script
+        assert "lsfg-vk.log" in script
+        assert 'exec 2>>"$lsfgvk_log"' in script
 
 
 def test_json_library_path_matches_private_tree():

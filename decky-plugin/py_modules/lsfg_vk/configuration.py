@@ -9,7 +9,7 @@ from typing import Dict, Any
 from .base_service import BaseService
 from .config_schema import ConfigurationManager, CONFIG_SCHEMA, ProfileData, DEFAULT_PROFILE_NAME
 from .config_schema_generated import ConfigurationData, get_script_generation_logic
-from .constants import ARMADA_DEVICE_ENV, ARMADA_GAME_LAUNCH
+from .constants import ARMADA_DEVICE_ENV, ARMADA_GAME_LAUNCH, LOG_FILENAME
 from .types import ConfigurationResponse, ProfilesResponse, ProfileResponse
 
 
@@ -128,6 +128,7 @@ class ConfigurationService(BaseService):
         
         lines.extend(self._generate_layer_environment_lines())
         lines.append(f"export LSFGVK_PROFILE={shlex.quote(DEFAULT_PROFILE_NAME)}")
+        lines.extend(self._generate_log_capture_lines())
         lines.extend(self._generate_game_launch_lines())
         
         return "\n".join(lines) + "\n"
@@ -159,6 +160,7 @@ class ConfigurationService(BaseService):
         
         lines.extend(self._generate_layer_environment_lines())
         lines.append(f"export LSFGVK_PROFILE={shlex.quote(current_profile)}")
+        lines.extend(self._generate_log_capture_lines())
         lines.extend(self._generate_game_launch_lines())
         
         return "\n".join(lines) + "\n"
@@ -175,6 +177,24 @@ class ConfigurationService(BaseService):
             "export DISABLE_LSFG=1",
             f"export VK_IMPLICIT_LAYER_PATH={shlex.quote(str(self.local_share_dir))}",
             f"export LSFGVK_CONFIG={shlex.quote(str(self.config_file_path))}",
+        ]
+
+    def _generate_log_capture_lines(self) -> list[str]:
+        """Capture layer/DXVK stderr. Game Mode otherwise discards it."""
+        log_path = self.config_dir / LOG_FILENAME
+        return [
+            f"lsfgvk_log={shlex.quote(str(log_path))}",
+            'mkdir -p "$(dirname "$lsfgvk_log")"',
+            '{',
+            '  echo "===== lsfg-vk-adaptive $(date -Is) pid=$$ ====="',
+            '  echo "VK_IMPLICIT_LAYER_PATH=${VK_IMPLICIT_LAYER_PATH-}"',
+            '  echo "LSFGVK_CONFIG=${LSFGVK_CONFIG-}"',
+            '  echo "LSFGVK_PROFILE=${LSFGVK_PROFILE-}"',
+            '  echo "DISABLE_LSFG=${DISABLE_LSFG-}"',
+            '  echo "ENABLE_GAMESCOPE_WSI=${ENABLE_GAMESCOPE_WSI-}"',
+            '  echo "command: $*"',
+            '} > "$lsfgvk_log"',
+            'exec 2>>"$lsfgvk_log"',
         ]
 
     @staticmethod
