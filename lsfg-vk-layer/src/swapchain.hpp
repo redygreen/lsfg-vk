@@ -82,7 +82,8 @@ namespace lsfgvk::layer {
             VkSwapchainKHR swapchain, void* next_chain, uint32_t imageIdx,
             const std::vector<VkSemaphore>& semaphores,
             const VkPresentInfoKHR* originalInfo,
-            VkSemaphore extraWait = VK_NULL_HANDLE);
+            VkSemaphore extraWait = VK_NULL_HANDLE,
+            bool replaceAppWaits = false);
         void waitFence(const vk::Vulkan& vk, const vk::Fence& fence, bool& inFlight);
         void copyToSource(const vk::Vulkan& vk, VkImage swapchainImage,
             const std::vector<VkSemaphore>& waitSemaphores, bool signalSync,

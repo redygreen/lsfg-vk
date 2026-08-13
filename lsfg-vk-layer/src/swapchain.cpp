@@ -222,38 +222,34 @@ VkResult Swapchain::present(const vk::Vulkan& vk,
             result = presentGeneratedFrames(vk, queue, swapchain, next_chain, imageIdx,
                 genCount, true);
         } else {
-            // Adaptive: never consume the game's present wait semaphores and
-            // never CPU-wait the source copy in this present (that flushed
-            // the GPU and collapsed intervals to 3 ms, extras to 0, and
-            // real FPS from ~70 to ~47). Present waits on the original
-            // semaphores plus copy-done.
+            // Adaptive extras use the Fixed present path (copy waits on the
+            // game's render semaphores) so interpolation sees consecutive
+            // finished frames. Skip copies also wait those semaphores, then
+            // QueuePresent waits copy-done only — binary semaphores cannot
+            // be waited by both the blit and the original present.
             waitFence(vk, *this->copyFence, this->copyFenceInFlight);
             waitFence(vk, *this->renderFence, this->renderFenceInFlight);
-            const VkSemaphore copyDone =
-                this->copyDoneSemaphores.at(this->fidx % 2).handle();
 
             if (genCount == 0 || this->fidx == 0) {
-                copyToSource(vk, swapchainImage, {}, false, copyDone,
+                forceFifo(next_chain);
+                const VkSemaphore copyDone =
+                    this->copyDoneSemaphores.at(this->fidx % 2).handle();
+                copyToSource(vk, swapchainImage, semaphores, false, copyDone,
                     this->copyFence->handle());
                 this->copyFenceInFlight = true;
                 this->instance.get().scheduleFrames(this->ctx.get(), 0);
                 result = queuePresentOriginal(vk, queue, swapchain, next_chain, imageIdx,
-                    semaphores, originalInfo, copyDone);
+                    semaphores, originalInfo, copyDone, true);
                 if (this->logPresentsRemaining > 0)
                     layerLog("lsfg-vk: adaptive skip present ok res="
                         + std::to_string(static_cast<int>(result)));
             } else {
                 this->instance.get().scheduleFrames(this->ctx.get(), genCount);
                 forceFifo(next_chain);
-                copyToSource(vk, swapchainImage, {}, true, copyDone,
-                    this->copyFence->handle());
-                this->copyFenceInFlight = true;
+                copyToSource(vk, swapchainImage, semaphores, true, VK_NULL_HANDLE,
+                    VK_NULL_HANDLE);
                 result = presentGeneratedFrames(vk, queue, swapchain, next_chain, imageIdx,
-                    genCount, false);
-                if (result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR) {
-                    result = queuePresentOriginal(vk, queue, swapchain, next_chain, imageIdx,
-                        semaphores, originalInfo, copyDone);
-                }
+                    genCount, true);
             }
         }
     } catch (...) {
@@ -274,14 +270,20 @@ VkResult Swapchain::queuePresentOriginal(const vk::Vulkan& vk, VkQueue queue,
         VkSwapchainKHR swapchain, void* next_chain, uint32_t imageIdx,
         const std::vector<VkSemaphore>& semaphores,
         const VkPresentInfoKHR* originalInfo,
-        VkSemaphore extraWait) {
-    std::vector<VkSemaphore> waits = semaphores;
-    if (originalInfo && originalInfo->pWaitSemaphores && originalInfo->waitSemaphoreCount) {
-        waits.assign(originalInfo->pWaitSemaphores,
-            originalInfo->pWaitSemaphores + originalInfo->waitSemaphoreCount);
+        VkSemaphore extraWait, bool replaceAppWaits) {
+    std::vector<VkSemaphore> waits;
+    if (replaceAppWaits) {
+        if (extraWait)
+            waits.push_back(extraWait);
+    } else {
+        waits = semaphores;
+        if (originalInfo && originalInfo->pWaitSemaphores && originalInfo->waitSemaphoreCount) {
+            waits.assign(originalInfo->pWaitSemaphores,
+                originalInfo->pWaitSemaphores + originalInfo->waitSemaphoreCount);
+        }
+        if (extraWait)
+            waits.push_back(extraWait);
     }
-    if (extraWait)
-        waits.push_back(extraWait);
 
     VkResult res = VK_SUCCESS;
     if (originalInfo && originalInfo->swapchainCount == 1) {
