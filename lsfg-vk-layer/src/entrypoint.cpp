@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "instance.hpp"
+#include "log.hpp"
 #include "lsfg-vk-common/helpers/errors.hpp"
 #include "lsfg-vk-common/helpers/pointers.hpp"
 #include "lsfg-vk-common/vulkan/vulkan.hpp"
@@ -99,6 +100,7 @@ namespace {
                 };
 
             instance_info->handles.push_back(*instance);
+            layerLog("lsfg-vk: vkCreateInstance succeeded");
 
             return VK_SUCCESS;
         } catch (const ls::vulkan_error& e) {
@@ -336,14 +338,13 @@ namespace {
             instance_info->swapchains.emplace(*swapchain,
                 ls::R<vk::Vulkan>(it->second));
 
+            layerLog("lsfg-vk: swapchain context created");
             return res;
         } catch (const ls::vulkan_error& e) {
-            std::cerr << "lsfg-vk: something went wrong during lsfg-vk swapchain creation:\n"
-                << "- " << e.what() << std::endl;
+            layerLog(std::string("lsfg-vk: swapchain creation failed: ") + e.what());
             return e.error();
         } catch (const std::exception& e) {
-            std::cerr << "lsfg-vk: something went wrong during lsfg-vk swapchain creation:\n"
-                << "- " << e.what() << std::endl;
+            layerLog(std::string("lsfg-vk: swapchain creation failed: ") + e.what());
             return VK_ERROR_INITIALIZATION_FAILED;
         }
     }
@@ -401,15 +402,11 @@ namespace {
                     { waitSemaphores.begin(), waitSemaphores.end() }
                 );
             } catch (const ls::vulkan_error& e) {
-                if (e.error() != VK_ERROR_OUT_OF_DATE_KHR) {
-                    std::cerr << "lsfg-vk: something went wrong during lsfg-vk swapchain presentation:\n"
-                        << "- " << e.what() << std::endl;
-                } // silently swallow out-of-date errors
-
+                if (e.error() != VK_ERROR_OUT_OF_DATE_KHR)
+                    layerLog(std::string("lsfg-vk: present failed: ") + e.what());
                 result = e.error();
             } catch (const std::exception& e) {
-                std::cerr << "lsfg-vk: something went wrong during lsfg-vk swapchain presentation:\n"
-                    << "- " << e.what() << std::endl;
+                layerLog(std::string("lsfg-vk: present failed: ") + e.what());
                 result = VK_ERROR_UNKNOWN;
             }
 
@@ -484,11 +481,15 @@ namespace {
 /// Vulkan layer entrypoint
 __attribute__((visibility("default")))
 VkResult vkNegotiateLoaderLayerInterfaceVersion(VkNegotiateLayerInterface* pVersionStruct) {
+    layerLog("lsfg-vk: vkNegotiate begin");
+
     // ensure loader compatibility
     if (!pVersionStruct
         || pVersionStruct->sType != LAYER_NEGOTIATE_INTERFACE_STRUCT
-        || pVersionStruct->loaderLayerInterfaceVersion < 2)
+        || pVersionStruct->loaderLayerInterfaceVersion < 2) {
+        layerLog("lsfg-vk: vkNegotiate rejected: incompatible loader");
         return VK_ERROR_INITIALIZATION_FAILED;
+    }
 
     // if the layer has already been initialized, skip
     if (layer_info) {
@@ -520,14 +521,15 @@ VkResult vkNegotiateLoaderLayerInterfaceVersion(VkNegotiateLayerInterface* pVers
         };
 
         if (!layer_info->root.active()) { // skip inactive
+            layerLog("lsfg-vk: no matching profile, layer inactive");
             delete layer_info; // NOLINT (memory management)
             layer_info = nullptr;
 
             return VK_ERROR_INITIALIZATION_FAILED;
         }
+        layerLog("lsfg-vk: layer active");
     } catch (const std::exception& e) {
-        std::cerr << "lsfg-vk: something went wrong during lsfg-vk layer initialization:\n";
-        std::cerr << "- " << e.what() << '\n';
+        layerLog(std::string("lsfg-vk: layer initialization failed: ") + e.what());
 
         return VK_ERROR_INITIALIZATION_FAILED;
     }

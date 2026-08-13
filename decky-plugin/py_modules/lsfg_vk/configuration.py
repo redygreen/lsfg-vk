@@ -9,7 +9,7 @@ from typing import Dict, Any
 from .base_service import BaseService
 from .config_schema import ConfigurationManager, CONFIG_SCHEMA, ProfileData, DEFAULT_PROFILE_NAME
 from .config_schema_generated import ConfigurationData, get_script_generation_logic
-from .constants import ARMADA_DEVICE_ENV, ARMADA_GAME_LAUNCH, LOG_FILENAME
+from .constants import ARMADA_DEVICE_ENV, ARMADA_GAME_LAUNCH, LOG_FILENAME, LAYER_LOG_FILENAME
 from .types import ConfigurationResponse, ProfilesResponse, ProfileResponse
 
 
@@ -177,23 +177,33 @@ class ConfigurationService(BaseService):
             "export DISABLE_LSFG=1",
             f"export VK_IMPLICIT_LAYER_PATH={shlex.quote(str(self.local_share_dir))}",
             f"export LSFGVK_CONFIG={shlex.quote(str(self.config_file_path))}",
+            f"export LSFGVK_LOG={shlex.quote(str(self.config_dir / LAYER_LOG_FILENAME))}",
         ]
 
     def _generate_log_capture_lines(self) -> list[str]:
-        """Capture layer/DXVK stderr. Game Mode otherwise discards it."""
-        log_path = self.config_dir / LOG_FILENAME
+        """Capture wrapper metadata. The layer writes $LSFGVK_LOG itself (Proton)."""
+        wrapper_log = self.config_dir / LOG_FILENAME
+        layer_log = self.config_dir / LAYER_LOG_FILENAME
         return [
-            f"lsfgvk_log={shlex.quote(str(log_path))}",
+            f"lsfgvk_log={shlex.quote(str(wrapper_log))}",
+            f"lsfgvk_layer_log={shlex.quote(str(layer_log))}",
             'mkdir -p "$(dirname "$lsfgvk_log")"',
             '{',
             '  echo "===== lsfg-vk-adaptive $(date -Is) pid=$$ ====="',
+            '  echo "argc=$#"',
+            '  printf "argv:"',
+            '  printf " %q" "$@"',
+            '  echo',
             '  echo "VK_IMPLICIT_LAYER_PATH=${VK_IMPLICIT_LAYER_PATH-}"',
             '  echo "LSFGVK_CONFIG=${LSFGVK_CONFIG-}"',
             '  echo "LSFGVK_PROFILE=${LSFGVK_PROFILE-}"',
+            '  echo "LSFGVK_LOG=${LSFGVK_LOG-}"',
             '  echo "DISABLE_LSFG=${DISABLE_LSFG-}"',
             '  echo "ENABLE_GAMESCOPE_WSI=${ENABLE_GAMESCOPE_WSI-}"',
-            '  echo "command: $*"',
-            '} > "$lsfgvk_log"',
+            '} >> "$lsfgvk_log"',
+            '{',
+            '  echo "===== wrapper $(date -Is) pid=$$ argc=$# ====="',
+            '} >> "$lsfgvk_layer_log"',
             'exec 2>>"$lsfgvk_log"',
         ]
 

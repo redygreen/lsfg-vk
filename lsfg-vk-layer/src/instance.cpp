@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "instance.hpp"
+#include "log.hpp"
 #include "lsfg-vk-common/helpers/paths.hpp"
 #include "swapchain.hpp"
 #include "lsfg-vk-common/configuration/detection.hpp"
@@ -12,7 +13,6 @@
 #include <cstdlib>
 #include <exception>
 #include <functional>
-#include <iostream>
 #include <optional>
 #include <string>
 #include <utility>
@@ -52,21 +52,7 @@ Root::Root() {
 
     this->active_profile = profile->second;
 
-    std::cerr << "lsfg-vk: using profile with name '" << this->active_profile->name << "' ";
-    switch (profile->first) {
-        case ls::IdentType::OVERRIDE:
-            std::cerr << "(identified via override)" << std::endl;
-            break;
-        case ls::IdentType::EXECUTABLE:
-            std::cerr << "(identified via executable)" << std::endl;
-            break;
-        case ls::IdentType::WINE_EXECUTABLE:
-            std::cerr << "(identified via wine executable)" << std::endl;
-            break;
-        case ls::IdentType::PROCESS_NAME:
-            std::cerr << "(identified via process name)" << std::endl;
-            break;
-    }
+    layerLog(std::string("lsfg-vk: using profile with name '") + this->active_profile->name + "'");
 }
 
 bool Root::update() {

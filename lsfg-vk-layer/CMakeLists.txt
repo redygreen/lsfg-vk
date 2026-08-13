@@ -1,6 +1,7 @@
 set(LAYER_SOURCES
     "src/entrypoint.cpp"
     "src/instance.cpp"
+    "src/log.cpp"
     "src/swapchain.cpp")
 
 find_package(Threads REQUIRED)

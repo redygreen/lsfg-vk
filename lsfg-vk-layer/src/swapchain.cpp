@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "swapchain.hpp"
+#include "log.hpp"
 #include "lsfg-vk-backend/lsfgvk.hpp"
 #include "lsfg-vk-common/configuration/config.hpp"
 #include "lsfg-vk-common/helpers/errors.hpp"
@@ -16,7 +17,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
-#include <iostream>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -131,10 +132,9 @@ Swapchain::Swapchain(const vk::Vulkan& vk, backend::Instance& backend,
     }
 
     if (this->profile.adaptive) {
-        std::cerr << "lsfg-vk: adaptive mode presents on the game thread "
-            << "(target_fps=" << this->profile.target_fps
-            << ", multiplier ceiling=" << this->profile.multiplier << ")"
-            << std::endl;
+        layerLog("lsfg-vk: adaptive mode presents on the game thread (target_fps="
+            + std::to_string(this->profile.target_fps)
+            + ", multiplier ceiling=" + std::to_string(this->profile.multiplier) + ")");
     }
 }
 
@@ -180,8 +180,7 @@ VkResult Swapchain::present(const vk::Vulkan& vk,
         ? chooseGeneratedCount()
         : this->destinationImages.size();
     if (this->profile.adaptive && this->fidx == 0) {
-        std::cerr << "lsfg-vk: first adaptive present genCount=" << genCount
-            << std::endl;
+        layerLog("lsfg-vk: first adaptive present genCount=" + std::to_string(genCount));
     }
     return presentGenerated(vk, queue, swapchain, next_chain, imageIdx, semaphores, genCount);
 }
