@@ -46,6 +46,14 @@ CONFIG_SCHEMA_DEF = {
         "location": "toml"
     },
 
+    "enabled": {
+        "name": "enabled",
+        "fieldType": ConfigFieldType.BOOLEAN,
+        "default": True,
+        "description": "enable frame generation (Off on the multiplier switch; hot-reloads)",
+        "location": "toml"
+    },
+
     "adaptive": {
         "name": "adaptive",
         "fieldType": ConfigFieldType.BOOLEAN,

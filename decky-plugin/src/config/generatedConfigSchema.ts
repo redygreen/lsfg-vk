@@ -11,6 +11,7 @@ export enum ConfigFieldType {
 export const DLL = "dll" as const;
 export const NO_FP16 = "no_fp16" as const;
 export const MULTIPLIER = "multiplier" as const;
+export const ENABLED = "enabled" as const;
 export const ADAPTIVE = "adaptive" as const;
 export const TARGET_FPS = "target_fps" as const;
 export const FLOW_SCALE = "flow_scale" as const;
@@ -51,6 +52,12 @@ export const CONFIG_SCHEMA: Record<string, ConfigField> = {
     fieldType: ConfigFieldType.INTEGER,
     default: 2,
     description: "frame generation multiplier (max/ceiling when adaptive)"
+  },
+  enabled: {
+    name: "enabled",
+    fieldType: ConfigFieldType.BOOLEAN,
+    default: true,
+    description: "enable frame generation (Off on the multiplier switch; hot-reloads)"
   },
   adaptive: {
     name: "adaptive",
@@ -131,6 +138,7 @@ export interface ConfigurationData {
   dll: string;
   no_fp16: boolean;
   multiplier: number;
+  enabled: boolean;
   adaptive: boolean;
   target_fps: number;
   flow_scale: number;
@@ -155,6 +163,7 @@ export function getDefaults(): ConfigurationData {
     dll: "/games/Lossless Scaling/Lossless.dll",
     no_fp16: false,
     multiplier: 2,
+    enabled: true,
     adaptive: false,
     target_fps: 60.0,
     flow_scale: 0.8,
@@ -175,6 +184,7 @@ export function getFieldTypes(): Record<string, ConfigFieldType> {
     dll: ConfigFieldType.STRING,
     no_fp16: ConfigFieldType.BOOLEAN,
     multiplier: ConfigFieldType.INTEGER,
+    enabled: ConfigFieldType.BOOLEAN,
     adaptive: ConfigFieldType.BOOLEAN,
     target_fps: ConfigFieldType.FLOAT,
     flow_scale: ConfigFieldType.FLOAT,

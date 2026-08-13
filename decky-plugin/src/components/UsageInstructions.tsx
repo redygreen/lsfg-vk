@@ -61,7 +61,7 @@ export function UsageInstructions() {
             marginTop: "8px"
           }}
         >
-          {t('USAGE_CONFIG_NOTE', 'The configuration is stored in ~/.config/lsfg-vk-adaptive/conf.toml and hot-reloads while games are running. Switching Adaptive on/off needs a game restart.')}
+          {t('USAGE_CONFIG_NOTE', 'The configuration is stored in ~/.config/lsfg-vk-adaptive/conf.toml and hot-reloads while games are running. Off / 2X / 3X / 4X and Target FPS apply on the next frame.')}
         </div>
       </PanelSectionRow>
     </>

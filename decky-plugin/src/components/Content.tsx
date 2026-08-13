@@ -31,7 +31,7 @@ export function Content() {
   const {
     config,
     loadLsfgConfig,
-    updateField
+    updateConfig
   } = useLsfgConfig();
 
   const {
@@ -48,16 +48,20 @@ export function Content() {
     }
   }, [isInstalled, loadLsfgConfig]);
 
-  const handleConfigChange = async (fieldName: keyof ConfigurationData, value: boolean | number | string) => {
+  const applyConfig = async (patch: Partial<ConfigurationData>) => {
+    const newConfig = { ...config, ...patch };
     if (currentProfile) {
-      const newConfig = { ...config, [fieldName]: value };
       const result = await updateProfileConfig(currentProfile, newConfig);
       if (result.success) {
         await loadLsfgConfig();
       }
     } else {
-      await updateField(fieldName, value);
+      await updateConfig(newConfig);
     }
+  };
+
+  const handleConfigChange = async (fieldName: keyof ConfigurationData, value: boolean | number | string) => {
+    await applyConfig({ [fieldName]: value } as Partial<ConfigurationData>);
   };
 
   const onInstall = () => {
@@ -142,7 +146,7 @@ export function Content() {
 
           <FpsMultiplierControl
             config={config}
-            onConfigChange={handleConfigChange}
+            onConfigPatch={applyConfig}
           />
         </>
       )}

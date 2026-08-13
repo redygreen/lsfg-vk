@@ -16,6 +16,7 @@ from shared_config import CONFIG_SCHEMA_DEF, ConfigFieldType
 DLL = "dll"
 NO_FP16 = "no_fp16"
 MULTIPLIER = "multiplier"
+ENABLED = "enabled"
 ADAPTIVE = "adaptive"
 TARGET_FPS = "target_fps"
 FLOW_SCALE = "flow_scale"
@@ -35,6 +36,7 @@ class ConfigurationData(TypedDict):
     dll: str
     no_fp16: bool
     multiplier: int
+    enabled: bool
     adaptive: bool
     target_fps: float
     flow_scale: float
@@ -122,4 +124,4 @@ def get_script_generation_logic():
     return generate_script_lines
 
 
-ALL_FIELDS = ['dll', 'no_fp16', 'multiplier', 'adaptive', 'target_fps', 'flow_scale', 'performance_mode', 'dxvk_frame_rate', 'enable_wow64', 'disable_steamdeck_mode', 'mangohud_workaround', 'disable_vkbasalt', 'force_enable_vkbasalt', 'enable_wsi', 'enable_zink']
+ALL_FIELDS = ['dll', 'no_fp16', 'multiplier', 'enabled', 'adaptive', 'target_fps', 'flow_scale', 'performance_mode', 'dxvk_frame_rate', 'enable_wow64', 'disable_steamdeck_mode', 'mangohud_workaround', 'disable_vkbasalt', 'force_enable_vkbasalt', 'enable_wsi', 'enable_zink']

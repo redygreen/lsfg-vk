@@ -125,6 +125,7 @@ namespace {
             .active_in = activityFromString(tbl["active_in"]),
             .gpu = tbl["gpu"].value<std::string>(),
             .multiplier = tbl["multiplier"].value_or(2U),
+            .enabled = tbl["enabled"].value_or(true),
             .adaptive = tbl["adaptive"].value_or(false),
             .target_fps = tbl["target_fps"].value_or(60.0F),
             .flow_scale = tbl["flow_scale"].value_or(1.0F),
@@ -168,6 +169,7 @@ namespace {
             .gpu = std::nullopt,
 
             .multiplier = 2,
+            .enabled = true,
             .adaptive = false,
             .target_fps = 60.0F,
             .flow_scale = 1.0F,
@@ -179,6 +181,8 @@ namespace {
         if (gpu) conf.gpu = std::string(gpu);
         const char* multiplier = std::getenv("LSFGVK_MULTIPLIER");
         if (multiplier) conf.multiplier = static_cast<size_t>(std::stoul(multiplier));
+        const char* enabled = std::getenv("LSFGVK_ENABLED");
+        if (enabled) conf.enabled = std::string(enabled) != "0";
         const char* adaptive = std::getenv("LSFGVK_ADAPTIVE");
         if (adaptive) conf.adaptive = std::string(adaptive) == "1";
         const char* target_fps = std::getenv("LSFGVK_TARGET_FPS");
@@ -252,6 +256,7 @@ void ConfigFile::write(const std::filesystem::path& path) const {
         if (conf.gpu)
             profile.insert("gpu", conf.gpu.value_or(""));
         profile.insert("multiplier", static_cast<int64_t>(conf.multiplier));
+        profile.insert("enabled", conf.enabled);
         profile.insert("adaptive", conf.adaptive);
         profile.insert("target_fps", conf.target_fps);
         profile.insert("flow_scale", conf.flow_scale);

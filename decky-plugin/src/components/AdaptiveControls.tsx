@@ -17,7 +17,7 @@ export function AdaptiveControls({
       <PanelSectionRow>
         <ToggleField
           label={t('CONFIG_ADAPTIVE', 'Adaptive Frame Generation')}
-          description={t('CONFIG_ADAPTIVE_DESC', 'Generate extra frames during present to approach Target FPS. Multiplier is a ceiling. Restart the game after toggling.')}
+          description={t('CONFIG_ADAPTIVE_DESC', 'Generate extra frames during present to approach Target FPS. Multiplier is a ceiling. Use Off on the multiplier switch to disable FG without restarting.')}
           checked={config.adaptive}
           onChange={(value) => onConfigChange(ADAPTIVE, value)}
         />

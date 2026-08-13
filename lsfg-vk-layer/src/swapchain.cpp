@@ -164,12 +164,14 @@ bool Swapchain::tryApplyRuntimeProfile(const ls::GameConf& next) {
         return false;
 
     const bool changed = next.adaptive != this->profile.adaptive
-        || next.target_fps != this->profile.target_fps;
+        || next.target_fps != this->profile.target_fps
+        || next.enabled != this->profile.enabled;
     this->profile = next;
     if (changed) {
         layerLog("lsfg-vk: adaptive runtime update target_fps="
             + std::to_string(this->profile.target_fps)
             + " adaptive=" + std::string(this->profile.adaptive ? "1" : "0")
+            + " enabled=" + std::string(this->profile.enabled ? "1" : "0")
             + " ceiling=" + std::to_string(this->profile.multiplier));
         this->logPresentsRemaining = 8;
     }
@@ -181,9 +183,11 @@ VkResult Swapchain::present(const vk::Vulkan& vk,
         void* next_chain, uint32_t imageIdx,
         const std::vector<VkSemaphore>& semaphores,
         const VkPresentInfoKHR* originalInfo) {
-    const size_t genCount = this->profile.adaptive
-        ? chooseGeneratedCount()
-        : this->destinationImages.size();
+    const size_t genCount = !this->profile.enabled
+        ? 0
+        : this->profile.adaptive
+            ? chooseGeneratedCount()
+            : this->destinationImages.size();
     const bool logThis = this->profile.adaptive
         && (this->logPresentsRemaining > 0 || this->fidx % 60 == 0);
     if (logThis) {
@@ -194,6 +198,7 @@ VkResult Swapchain::present(const vk::Vulkan& vk,
             + " wait_ms=" + std::to_string(this->lastWaitDt * 1000.0)
             + " ema_ms=" + std::to_string(this->lastEmaDt * 1000.0)
             + " acc=" + std::to_string(this->lastAcc)
+            + " enabled=" + std::string(this->profile.enabled ? "1" : "0")
             + " waits=" + std::to_string(semaphores.size()));
     }
     const auto result = presentGenerated(vk, queue, swapchain, next_chain, imageIdx, semaphores,

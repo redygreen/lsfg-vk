@@ -35,6 +35,8 @@ namespace ls {
         std::optional<std::string> gpu;
         /// multiplier for frame generation (max/ceiling when adaptive is enabled)
         size_t multiplier{2};
+        /// when false, present the game frame with no generated extras (hot-reloadable)
+        bool enabled{true};
         /// generate only as many frames as needed to approach target_fps
         bool adaptive{false};
         /// target displayed framerate for adaptive mode
