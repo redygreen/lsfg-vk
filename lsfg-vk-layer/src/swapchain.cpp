@@ -230,9 +230,9 @@ VkResult Swapchain::present(const vk::Vulkan& vk,
             // QueuePresent waits copy-done only — binary semaphores cannot
             // be waited by both the blit and the original present.
             //
-            // Optical-flow ingest runs only on dithered skips (a generate
-            // is coming). Skips at/above target are copy-only so Adaptive
-            // does not run LSFG at native rate.
+            // Optical-flow ingest runs only if the pacer asks for it
+            // (dithered skip before a generate). Integer-locked x2/x3
+            // generates every real frame and does not ingest.
             waitFence(vk, *this->copyFence, this->copyFenceInFlight);
             waitFence(vk, *this->renderFence, this->renderFenceInFlight);
 

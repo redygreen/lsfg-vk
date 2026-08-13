@@ -24,14 +24,11 @@ namespace lsfgvk::layer {
 
     /// How many interpolated frames to insert before this real present.
     ///
-    /// extras = target * interval − 1. Values within 0.15 of an integer snap
-    /// to that integer so 47 Hz at 90 stays at a stable 1 extra (x2 cadence)
-    /// instead of skipping ~9% of extras (FIFO hitch). Mid-range values still
-    /// dither with a remainder. multiplier is a ceiling.
-    ///
-    /// `ingest` is set only on a dithered skip that will generate soon, so
-    /// LSFG temporal state stays warm without running optical-flow at native
-    /// rate while already at the target.
+    /// extrasWant = target × interval − 1, then locked to a stable integer
+    /// (0 / 1 / 2 / …) with hysteresis. Mixing 0 and 1 extras keeps Gamescope
+    /// FPS even while motion judders; x2 smoothness needs extra-real-extra-real.
+    /// FIFO then paces the game toward target / (1 + extras). multiplier is a
+    /// ceiling. `ingest` is unused while the lock is integer (no dithered skips).
     ///
     /// Interval is present-to-present of the game's QueuePresent calls.
     /// A long acquire wait plus already-fast GPU work means the game is
@@ -61,6 +58,7 @@ namespace lsfgvk::layer {
 
             if (!this->frameAt.has_value()) {
                 this->acc = 0.0;
+                this->locked.reset();
                 out.genCount = 0;
                 return out;
             }
@@ -77,6 +75,7 @@ namespace lsfgvk::layer {
 
             // Loading hitch, or a same-timestamp probe.
             if (dt > 0.100 || dt < 0.001) {
+                this->locked.reset();
                 out.genCount = 0;
                 return out;
             }
@@ -85,6 +84,7 @@ namespace lsfgvk::layer {
             // the game at refresh / (1 + extras).
             if (out.waitDt > 0.003 && workDt * target <= 1.05) {
                 this->acc *= 0.35;
+                this->locked.reset();
                 out.acc = this->acc;
                 out.genCount = 0;
                 return out;
@@ -115,23 +115,25 @@ namespace lsfgvk::layer {
                 target * *this->emaDt - 1.0, 0.0, static_cast<double>(maxGen));
             out.extrasWant = extrasWant;
 
-            constexpr double kSnap = 0.15;
-            const double nearest = std::round(extrasWant);
-            if (std::abs(extrasWant - nearest) <= kSnap) {
-                out.genCount = static_cast<size_t>(nearest);
-                this->acc = 0.0;
-                out.acc = 0.0;
-                return out;
+            // Enter the next integer a bit below 0.5 so 55–62 Hz at 90
+            // locks to x2 instead of dithering. Leave only when clearly
+            // near the target (want ≲ 0.30 for dropping 1 extra).
+            if (!this->locked.has_value()) {
+                size_t initial = 0;
+                if (extrasWant >= 0.40)
+                    initial = std::min(maxGen, std::max<size_t>(1,
+                        static_cast<size_t>(std::lround(extrasWant))));
+                this->locked = initial;
+            } else {
+                const double cur = static_cast<double>(*this->locked);
+                if (extrasWant >= cur + 0.40 && *this->locked < maxGen)
+                    this->locked = *this->locked + 1;
+                else if (extrasWant <= cur - 0.70 && *this->locked > 0)
+                    this->locked = *this->locked - 1;
             }
-
-            this->acc += extrasWant;
-            int extra = static_cast<int>(std::floor(this->acc));
-            extra = std::clamp(extra, 0, static_cast<int>(maxGen));
-            this->acc -= static_cast<double>(extra);
-            this->acc = std::clamp(this->acc, 0.0, 0.999);
-            out.genCount = static_cast<size_t>(extra);
-            out.acc = this->acc;
-            out.ingest = extra == 0;
+            out.genCount = *this->locked;
+            this->acc = 0.0;
+            out.acc = 0.0;
             return out;
         }
 
@@ -142,6 +144,7 @@ namespace lsfgvk::layer {
     private:
         std::optional<Clock::time_point> frameAt;
         std::optional<double> emaDt;
+        std::optional<size_t> locked;
         double acc{0.0};
     };
 

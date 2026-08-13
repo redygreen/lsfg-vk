@@ -152,13 +152,17 @@ int main() {
             "47 Hz game at 90 target stays at a stable 1 extra (no skip hitch)");
         expect(frac47 > 0.98, "47 Hz game at 90 target does not dither skips");
 
+        const auto [mean57, frac57] = meanGen(90, 1000.0 / 57.0, 140);
+        expect(mean57 > 0.98 && frac57 > 0.98,
+            "57 Hz game at 90 target locks to x2 (not 0/1 dither)");
+
         const auto [mean60, frac60] = meanGen(60, 22.222, 90);
-        expect(std::abs(mean60 - 1.0 / 3.0) < 0.12,
-            "45 Hz game at 60 target averages ~0.33 extras");
+        expect(mean60 < 0.05 && frac60 < 0.05,
+            "45 Hz game at 60 target stays native (0.33 extras is not x2)");
 
         const auto [mean70, frac70] = meanGen(70, 22.222, 90);
-        expect(std::abs(mean70 - (70.0 / 45.0 - 1.0)) < 0.12,
-            "45 Hz game at 70 target averages ~0.56 extras");
+        expect(mean70 > 0.98 && frac70 > 0.98,
+            "45 Hz game at 70 target locks to 1 extra (x2 cadence)");
     }
 
     {
@@ -167,20 +171,23 @@ int main() {
         auto t = t0;
         int ingestSkips = 0;
         int extras = 0;
+        int counted = 0;
         for (int i = 0; i < 40; ++i) {
             t += 16ms;
             const auto s = step(pacer, 90, t);
             pacer.markFrame(t);
             if (i < 8)
                 continue;
+            ++counted;
             if (s.genCount > 0)
                 ++extras;
             if (s.ingest)
                 ++ingestSkips;
-            expect(!(s.ingest && s.genCount > 0), "ingest is skip-only");
+            expect(s.genCount == 1, "62 Hz at 90 locks to x2, no 0/1 mix");
+            expect(!s.ingest, "integer lock does not dither-ingest");
         }
-        expect(ingestSkips > 5 && extras > 5,
-            "62 Hz game at 90 dithers extras and ingests the skips");
+        expect(extras == counted, "62 Hz game at 90 generates every real frame");
+        expect(ingestSkips == 0, "no ingest skips at locked x2");
     }
 
     if (failures != 0) {
