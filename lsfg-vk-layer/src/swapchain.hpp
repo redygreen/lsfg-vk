@@ -62,8 +62,9 @@ namespace lsfgvk::layer {
         /// @param next_chain next chain pointer for the present info (WARN: shared!)
         /// @param imageIdx swapchain image index to present to
         /// @param semaphores semaphores to wait on before presenting
-        /// @param originalInfo original QueuePresent info; Adaptive never
-        ///                     replaces these wait semaphores
+        /// @param originalInfo original QueuePresent info. Adaptive skip
+        ///                     presents wait the source-copy semaphore because
+        ///                     the blit already consumed the game's binary waits.
         /// @throws ls::vulkan_error on vulkan errors
         VkResult present(const vk::Vulkan& vk,
             VkQueue queue, VkSwapchainKHR swapchain,

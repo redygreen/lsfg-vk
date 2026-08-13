@@ -129,6 +129,20 @@ namespace lsfgvk::backend {
         void scheduleFrames(Context& context, size_t genCount);
 
         ///
+        /// Ingest the current real frame into optical-flow history without
+        /// generating destination images.
+        ///
+        /// Same GPU handshake as scheduleFrames: the prepass waits on the
+        /// context timeline so the caller can copy the real frame into the
+        /// source slot and signal that timeline afterwards. Advances the
+        /// real-frame index and the timeline index by one.
+        ///
+        /// @param context Context to use.
+        /// @throws backend::error on failure
+        ///
+        void scheduleIngest(Context& context);
+
+        ///
         /// Run optical-flow prepass for the current real-frame pair.
         ///
         /// The caller must have copied the latest real frame into the source

@@ -227,10 +227,13 @@ VkResult Swapchain::present(const vk::Vulkan& vk,
             // finished frames. Skip copies also wait those semaphores, then
             // QueuePresent waits copy-done only — binary semaphores cannot
             // be waited by both the blit and the original present.
+            //
+            // Skip still runs LSFG optical-flow ingest so the next generate
+            // interpolates the latest pair, not a stale temporal buffer.
             waitFence(vk, *this->copyFence, this->copyFenceInFlight);
             waitFence(vk, *this->renderFence, this->renderFenceInFlight);
 
-            if (genCount == 0 || this->fidx == 0) {
+            if (this->fidx == 0) {
                 forceFifo(next_chain);
                 const VkSemaphore copyDone =
                     this->copyDoneSemaphores.at(this->fidx % 2).handle();
@@ -241,7 +244,20 @@ VkResult Swapchain::present(const vk::Vulkan& vk,
                 result = queuePresentOriginal(vk, queue, swapchain, next_chain, imageIdx,
                     semaphores, originalInfo, copyDone, true);
                 if (this->logPresentsRemaining > 0)
-                    layerLog("lsfg-vk: adaptive skip present ok res="
+                    layerLog("lsfg-vk: adaptive first present ok res="
+                        + std::to_string(static_cast<int>(result)));
+            } else if (genCount == 0) {
+                forceFifo(next_chain);
+                this->instance.get().scheduleIngest(this->ctx.get());
+                const VkSemaphore copyDone =
+                    this->copyDoneSemaphores.at(this->fidx % 2).handle();
+                copyToSource(vk, swapchainImage, semaphores, true, copyDone,
+                    this->copyFence->handle());
+                this->copyFenceInFlight = true;
+                result = queuePresentOriginal(vk, queue, swapchain, next_chain, imageIdx,
+                    semaphores, originalInfo, copyDone, true);
+                if (this->logPresentsRemaining > 0)
+                    layerLog("lsfg-vk: adaptive ingest skip present ok res="
                         + std::to_string(static_cast<int>(result)));
             } else {
                 this->instance.get().scheduleFrames(this->ctx.get(), genCount);

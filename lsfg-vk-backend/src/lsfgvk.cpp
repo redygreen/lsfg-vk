@@ -106,6 +106,9 @@ namespace lsfgvk::backend {
         /// @param genCount number of intermediate frames to generate
         void scheduleFrames(size_t genCount);
 
+        /// ingest a real frame into optical-flow history (no dest frames)
+        void scheduleIngest();
+
         /// run optical-flow prepass for a real-frame pair
         void schedulePrepass(size_t realFidx);
 
@@ -657,6 +660,44 @@ void Context::scheduleFrames(size_t genCount) {
     }
 
     this->idx += genCount;
+    this->fidx++;
+    this->prevHadGpuWork = true;
+}
+
+void Instance::scheduleIngest(Context& context) { // NOLINT (static)
+    try {
+        context.scheduleIngest();
+    } catch (const std::exception& e) {
+        throw backend::error("Unable to ingest real frame", e);
+    }
+}
+
+void Context::scheduleIngest() {
+    if (this->prevHadGpuWork) {
+        if (!this->cmdbufFence.wait(this->ctx.vk))
+            throw backend::error("Timeout waiting for previous frame to complete");
+        this->cmdbufFence.reset(this->ctx.vk);
+    }
+
+    const auto& cmdbuf = this->cmdbufs.at(0);
+    cmdbuf.begin(ctx.vk);
+
+    this->mipmaps.render(ctx.vk, cmdbuf, this->fidx);
+    for (size_t i = 0; i < 7; ++i) {
+        this->alpha0.at(6 - i).render(ctx.vk, cmdbuf);
+        this->alpha1.at(6 - i).render(ctx.vk, cmdbuf, this->fidx);
+    }
+    this->beta0.render(ctx.vk, cmdbuf, this->fidx);
+    this->beta1.render(ctx.vk, cmdbuf);
+
+    cmdbuf.end(ctx.vk);
+    cmdbuf.submit(this->ctx.vk,
+        {}, this->syncSemaphore.handle(), this->idx,
+        {}, VK_NULL_HANDLE, 0,
+        this->cmdbufFence.handle()
+    );
+
+    this->idx++;
     this->fidx++;
     this->prevHadGpuWork = true;
 }
