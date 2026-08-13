@@ -12,6 +12,7 @@ import { SmartClipboardButton } from "./SmartClipboardButton";
 import { FgmodClipboardButton } from "./FgmodClipboardButton";
 import { FpsMultiplierControl } from "./FpsMultiplierControl";
 import { AdaptiveControls } from "./AdaptiveControls";
+import { AdaptiveStats } from "./AdaptiveStats";
 import { NerdStuffModal } from "./NerdStuffModal";
 import { FlatpaksModal } from "./FlatpaksModal";
 import { ConfigurationData } from "../config/configSchema";
@@ -118,6 +119,8 @@ export function Content() {
             config={config}
             onConfigChange={handleConfigChange}
           />
+
+          <AdaptiveStats />
 
           <PanelSectionRow>
             <div

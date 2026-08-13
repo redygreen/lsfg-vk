@@ -21,6 +21,7 @@ SCRIPT_NAME = "lsfg-vk-adaptive"
 CONFIG_FILENAME = "conf.toml"
 LOG_FILENAME = "lsfg-vk.log"
 LAYER_LOG_FILENAME = "lsfg-vk-layer.log"
+STATS_FILENAME = "stats.json"
 LIB_FILENAME = "liblsfg-vk-layer.so"
 JSON_FILENAME = "VkLayer_LSFGVK_frame_generation.json"
 # Manifest lives at <root>/vulkan/implicit_layer.d, library at <root>/lib.

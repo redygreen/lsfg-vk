@@ -33,6 +33,7 @@ from lsfg_vk.constants import (
     LEGACY_JSON,
     LEGACY_LIB,
     LIB_FILENAME,
+    STATS_FILENAME,
     VULKAN_LAYER_DIR,
 )
 from lsfg_vk.installation import InstallationService
@@ -60,6 +61,7 @@ def test_constants_are_private():
     assert LEGACY_JSON == ".local/share/vulkan/implicit_layer.d/" + JSON_FILENAME
     assert LEGACY_LIB == ".local/lib/" + LIB_FILENAME
     assert LAYER_LIBRARY_RELATIVE_PATH == "../../lib/" + LIB_FILENAME
+    assert STATS_FILENAME == "stats.json"
 
 
 def test_wrapper_sets_isolated_layer_path():
@@ -123,11 +125,35 @@ def test_legacy_global_files_are_removed_without_touching_official():
         assert official_json.exists()
 
 
+def test_adaptive_stats_reader():
+    import asyncio
+    from lsfg_vk.plugin import Plugin
+
+    with tempfile.TemporaryDirectory() as tmp:
+        home = Path(tmp)
+        stats_dir = home / ".config" / "lsfg-vk-adaptive"
+        stats_dir.mkdir(parents=True)
+        (stats_dir / STATS_FILENAME).write_text(
+            '{"real_fps":45.2,"generated_fps":44.1,"displayed_fps":89.3,'
+            '"avg_gen":0.98,"target_fps":90.0,"adaptive":true}\n',
+            encoding="utf-8",
+        )
+        with patch("lsfg_vk.plugin.Path.home", return_value=home):
+            plugin = Plugin()
+            result = asyncio.run(plugin.get_adaptive_stats())
+        assert result["success"] is True
+        assert result["stale"] is False
+        assert result["real_fps"] == 45.2
+        assert result["generated_fps"] == 44.1
+        assert result["displayed_fps"] == 89.3
+
+
 def main() -> None:
     test_constants_are_private()
     test_wrapper_sets_isolated_layer_path()
     test_json_library_path_matches_private_tree()
     test_legacy_global_files_are_removed_without_touching_official()
+    test_adaptive_stats_reader()
     print("isolated install paths OK")
 
 

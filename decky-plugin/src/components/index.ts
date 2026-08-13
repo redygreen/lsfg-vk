@@ -4,6 +4,7 @@ export { InstallationButton } from "./InstallationButton";
 export { ConfigurationSection } from "./ConfigurationSection";
 export { FpsMultiplierControl } from "./FpsMultiplierControl";
 export { AdaptiveControls } from "./AdaptiveControls";
+export { AdaptiveStats } from "./AdaptiveStats";
 export { UsageInstructions } from "./UsageInstructions";
 export { SmartClipboardButton } from "./SmartClipboardButton";
 export { FgmodClipboardButton } from "./FgmodClipboardButton";

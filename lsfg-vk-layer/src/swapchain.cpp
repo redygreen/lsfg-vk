@@ -3,6 +3,7 @@
 #include "swapchain.hpp"
 #include "adaptive.hpp"
 #include "log.hpp"
+#include "stats.hpp"
 #include "lsfg-vk-backend/lsfgvk.hpp"
 #include "lsfg-vk-common/configuration/config.hpp"
 #include "lsfg-vk-common/helpers/errors.hpp"
@@ -190,6 +191,7 @@ VkResult Swapchain::present(const vk::Vulkan& vk,
     }
     const auto result = presentGenerated(vk, queue, swapchain, next_chain, imageIdx, semaphores,
         genCount, originalInfo);
+    recordFrameStats(genCount, this->profile.target_fps, this->profile.adaptive);
     if (this->logPresentsRemaining > 0)
         this->logPresentsRemaining--;
     return result;

@@ -8,6 +8,8 @@ Vulkan layer for frame generation on Steam Deck.
 import os
 import subprocess
 import hashlib
+import json
+import time
 from typing import Dict, Any
 from pathlib import Path
 
@@ -17,6 +19,7 @@ from .installation import InstallationService
 from .dll_detection import DllDetectionService
 from .configuration import ConfigurationService
 from .config_schema import ConfigurationManager
+from .constants import CONFIG_DIR, STATS_FILENAME
 from .flatpak_service import FlatpakService
 
 
@@ -133,6 +136,41 @@ class Plugin:
             ConfigurationResponse dict with current configuration or error
         """
         return self.configuration_service.get_config()
+
+    async def get_adaptive_stats(self) -> Dict[str, Any]:
+        """Read the one-second FPS snapshot written by the Vulkan layer."""
+        empty = {
+            "success": True,
+            "stale": True,
+            "real_fps": 0.0,
+            "generated_fps": 0.0,
+            "displayed_fps": 0.0,
+            "avg_gen": 0.0,
+            "target_fps": 0.0,
+            "adaptive": False,
+            "error": None,
+        }
+        path = Path.home() / CONFIG_DIR / STATS_FILENAME
+        try:
+            if not path.exists():
+                return empty
+            age = time.time() - path.stat().st_mtime
+            data = json.loads(path.read_text(encoding="utf-8"))
+            return {
+                "success": True,
+                "stale": age > 2.5,
+                "real_fps": float(data.get("real_fps", 0.0)),
+                "generated_fps": float(data.get("generated_fps", 0.0)),
+                "displayed_fps": float(data.get("displayed_fps", 0.0)),
+                "avg_gen": float(data.get("avg_gen", 0.0)),
+                "target_fps": float(data.get("target_fps", 0.0)),
+                "adaptive": bool(data.get("adaptive", False)),
+                "error": None,
+            }
+        except Exception as e:
+            empty["success"] = False
+            empty["error"] = str(e)
+            return empty
 
     async def get_config_schema(self) -> Dict[str, Any]:
         """Get configuration schema information for frontend

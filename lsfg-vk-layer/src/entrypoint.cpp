@@ -495,7 +495,7 @@ namespace {
 __attribute__((visibility("default")))
 VkResult vkNegotiateLoaderLayerInterfaceVersion(VkNegotiateLayerInterface* pVersionStruct) {
     layerLog("lsfg-vk: vkNegotiate begin");
-    layerLog("lsfg-vk: adaptive build=game-dt-v4");
+    layerLog("lsfg-vk: adaptive build=stats-v5");
 
     // ensure loader compatibility
     if (!pVersionStruct

@@ -79,6 +79,18 @@ export interface FgmodCheckResult {
   error?: string;
 }
 
+export interface AdaptiveStatsResult {
+  success: boolean;
+  stale: boolean;
+  real_fps: number;
+  generated_fps: number;
+  displayed_fps: number;
+  avg_gen: number;
+  target_fps: number;
+  adaptive: boolean;
+  error?: string;
+}
+
 // Flatpak management interfaces
 export interface FlatpakExtensionStatus {
   success: boolean;
@@ -140,6 +152,7 @@ export const getLaunchOption = callable<[], LaunchOptionResult>("get_launch_opti
 export const getConfigFileContent = callable<[], FileContentResult>("get_config_file_content");
 export const getLaunchScriptContent = callable<[], FileContentResult>("get_launch_script_content");
 export const checkFgmodDirectory = callable<[], FgmodCheckResult>("check_fgmod_directory");
+export const getAdaptiveStats = callable<[], AdaptiveStatsResult>("get_adaptive_stats");
 
 // Flatpak management API functions
 export const checkFlatpakExtensionStatus = callable<[], FlatpakExtensionStatus>("check_flatpak_extension_status");
