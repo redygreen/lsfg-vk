@@ -3,8 +3,10 @@
 #include "adaptive.hpp"
 
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <utility>
 
 using lsfgvk::layer::AdaptivePacer;
 using Clock = AdaptivePacer::Clock;
@@ -21,8 +23,34 @@ namespace {
     }
 
     AdaptivePacer::Sample step(AdaptivePacer& pacer, double target, Clock::time_point t,
+            double waitSec = 0.0, size_t maxGen = 3) {
+        return pacer.choose(target, maxGen, t, waitSec);
+    }
+
+    std::pair<double, double> meanGen(double target, double dtMs, int n,
             double waitSec = 0.0) {
-        return pacer.choose(target, 3, t, waitSec);
+        AdaptivePacer pacer;
+        auto t = Clock::time_point(Clock::duration{0});
+        pacer.markPresentReturned(t);
+        double sum = 0.0;
+        int counted = 0;
+        int extrasFrames = 0;
+        for (int i = 0; i < n; ++i) {
+            t += std::chrono::microseconds(static_cast<int>(dtMs * 1000.0));
+            const auto s = step(pacer, target, t, waitSec);
+            pacer.markPresentReturned(t);
+            if (i < 8)
+                continue;
+            sum += static_cast<double>(s.genCount);
+            ++counted;
+            if (s.genCount > 0)
+                ++extrasFrames;
+        }
+        const double mean = counted ? sum / static_cast<double>(counted) : 0.0;
+        const double frac = counted
+            ? static_cast<double>(extrasFrames) / static_cast<double>(counted)
+            : 0.0;
+        return {mean, frac};
     }
 }
 
@@ -49,7 +77,7 @@ int main() {
         expect(s.genCount == 0, "16 ms frame does not start FG");
         pacer.markPresentReturned(t0 + 16ms);
         s = step(pacer, 90, t0 + 24ms);
-        expect(s.genCount == 0, "fast follow-up does not error-diffuse into FG");
+        expect(s.genCount == 0, "fast follow-up does not fire leftover extras");
     }
 
     {
@@ -90,6 +118,22 @@ int main() {
     {
         AdaptivePacer pacer;
         pacer.markPresentReturned(t0);
+        auto t = t0;
+        for (int i = 0; i < 4; ++i) {
+            t += 22ms;
+            step(pacer, 90, t);
+            pacer.markPresentReturned(t);
+        }
+        t += 200ms;
+        expect(step(pacer, 90, t).genCount == 0, "loading hitch skips extras");
+        pacer.markPresentReturned(t);
+        t += 22ms;
+        expect(step(pacer, 90, t).genCount == 1, "FG resumes after loading hitch");
+    }
+
+    {
+        AdaptivePacer pacer;
+        pacer.markPresentReturned(t0);
         auto t = t0 + 22ms;
         expect(step(pacer, 90, t).genCount == 1, "start at 1");
         pacer.markPresentReturned(t);
@@ -102,6 +146,27 @@ int main() {
             expect(s.genCount <= 2, "120 target does not run to ceiling");
             pacer.markPresentReturned(t);
         }
+    }
+
+    {
+        const auto [mean90, frac90] = meanGen(90, 22.222, 90);
+        expect(mean90 > 0.9 && mean90 < 1.1, "45 Hz game at 90 target averages ~1 extra");
+        expect(frac90 > 0.9, "45 Hz game at 90 target almost always generates");
+
+        const auto [mean60, frac60] = meanGen(60, 22.222, 90);
+        expect(std::abs(mean60 - 1.0 / 3.0) < 0.12,
+            "45 Hz game at 60 target averages ~0.33 extras (not stuck at 0)");
+        expect(frac60 > 0.15 && frac60 < 0.55,
+            "45 Hz game at 60 target inserts extras on some frames");
+
+        const auto [mean70, frac70] = meanGen(70, 22.222, 90);
+        expect(std::abs(mean70 - (70.0 / 45.0 - 1.0)) < 0.12,
+            "45 Hz game at 70 target averages ~0.56 extras (no 70 cliff)");
+        expect(frac70 > 0.35, "45 Hz game at 70 target generates on many frames");
+
+        const auto [mean50, _] = meanGen(50, 22.222, 90);
+        expect(mean50 > 0.02 && mean50 < 0.25,
+            "45 Hz game at 50 target inserts a few extras");
     }
 
     if (failures != 0) {

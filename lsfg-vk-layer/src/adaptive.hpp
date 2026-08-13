@@ -24,9 +24,12 @@ namespace lsfgvk::layer {
 
     /// Chooses how many interpolated frames to insert for Adaptive FG.
     ///
-    /// Uses GPU/CPU work time (present-to-present minus the game's acquire wait)
-    /// so extra FIFO presents cannot feed back as a fake 45 FPS cap. Integer
-    /// genCount is held with hysteresis to avoid 0/1 flicker (uneven frametime).
+    /// Work time is present-to-present minus the game's acquire wait, so extra
+    /// FIFO presents cannot feed back as a fake 45 FPS cap.
+    ///
+    /// Integer extras cannot hit every target from a 45 Hz game (1 extra = 90
+    /// displayed). A remainder accumulator spreads extras over time so a 60 FPS
+    /// target actually inserts ~0.33 extras/frame instead of sticking at 0 or 1.
     class AdaptivePacer {
     public:
         using Clock = std::chrono::steady_clock;
@@ -37,16 +40,23 @@ namespace lsfgvk::layer {
             double workDt{0.0};
             double waitDt{0.0};
             double emaDt{0.0};
+            double acc{0.0};
         };
 
         [[nodiscard]] Sample choose(double targetFps, size_t maxGen,
                 Clock::time_point now, double acquireWaitSec = 0.0) {
             Sample out{};
             out.waitDt = acquireWaitSec < 0.0 ? 0.0 : acquireWaitSec;
+            out.acc = this->acc;
+            out.emaDt = this->emaDt.value_or(0.0);
+            out.genCount = this->lastGenCount;
 
             if (!this->presentReturnedAt.has_value()) {
                 this->emaDt.reset();
                 this->lastGenCount = 0;
+                this->acc = 0.0;
+                out.genCount = 0;
+                out.acc = 0.0;
                 return out;
             }
 
@@ -59,9 +69,10 @@ namespace lsfgvk::layer {
                 workDt = gameDt;
             out.workDt = workDt;
 
-            // Loading hitch: passthrough this frame, keep EMA / last gen.
-            if (gameDt > 0.080) {
-                out.emaDt = this->emaDt.value_or(0.0);
+            const double target = std::clamp(targetFps, 30.0, 240.0);
+
+            // Loading screen: skip extras this frame, keep EMA / remainder.
+            if (gameDt > 0.120) {
                 out.genCount = 0;
                 return out;
             }
@@ -84,13 +95,37 @@ namespace lsfgvk::layer {
                 this->emaDt = workDt;
             else
                 this->emaDt = kAlpha * workDt + (1.0 - kAlpha) * *this->emaDt;
+            this->emaDt = std::clamp(*this->emaDt, 0.001, 0.25);
             out.emaDt = *this->emaDt;
 
-            const double target = std::max(1.0, targetFps);
-            const double extras = target * *this->emaDt - 1.0;
-            const size_t gen = pickGen(extras, maxGen);
+            // This frame already met the target: no extras, bleed remainder so a
+            // fast frame cannot fire a leftover extra (old error-diffusion bug).
+            if (workDt * target <= 1.05) {
+                this->acc = std::clamp(this->acc * 0.35, -0.25, 0.25);
+                this->lastGenCount = 0;
+                out.acc = this->acc;
+                out.genCount = 0;
+                return out;
+            }
+
+            if (maxGen == 0) {
+                this->lastGenCount = 0;
+                out.genCount = 0;
+                out.acc = this->acc;
+                return out;
+            }
+
+            this->acc += target * *this->emaDt;
+            int presents = static_cast<int>(std::lround(this->acc));
+            const int maxPresents = static_cast<int>(maxGen) + 1;
+            presents = std::clamp(presents, 1, maxPresents);
+            this->acc -= static_cast<double>(presents);
+            this->acc = std::clamp(this->acc, -1.15, 1.15);
+
+            const size_t gen = static_cast<size_t>(presents - 1);
             this->lastGenCount = gen;
             out.genCount = gen;
+            out.acc = this->acc;
             return out;
         }
 
@@ -99,33 +134,10 @@ namespace lsfgvk::layer {
         }
 
     private:
-        [[nodiscard]] size_t pickGen(double extras, size_t maxGen) const {
-            size_t want = 0;
-            if (extras > 0.0) {
-                auto rounded = static_cast<size_t>(std::llround(extras));
-                if (rounded > maxGen)
-                    rounded = maxGen;
-                want = rounded;
-            }
-
-            const size_t last = this->lastGenCount;
-            constexpr double kBand = 0.55;
-            if (want > last) {
-                if (extras >= static_cast<double>(last) + kBand)
-                    return last + 1 > maxGen ? maxGen : last + 1;
-                return last;
-            }
-            if (want < last) {
-                if (last > 0 && extras <= static_cast<double>(last) - kBand)
-                    return last - 1;
-                return last;
-            }
-            return want > maxGen ? maxGen : want;
-        }
-
         std::optional<Clock::time_point> presentReturnedAt;
         std::optional<double> emaDt;
         size_t lastGenCount{0};
+        double acc{0.0};
     };
 
 }

@@ -147,6 +147,7 @@ size_t Swapchain::chooseGeneratedCount() {
     this->lastWorkDt = sample.workDt;
     this->lastWaitDt = sample.waitDt;
     this->lastEmaDt = sample.emaDt;
+    this->lastAcc = sample.acc;
     return sample.genCount;
 }
 
@@ -192,6 +193,7 @@ VkResult Swapchain::present(const vk::Vulkan& vk,
             + " work_ms=" + std::to_string(this->lastWorkDt * 1000.0)
             + " wait_ms=" + std::to_string(this->lastWaitDt * 1000.0)
             + " ema_ms=" + std::to_string(this->lastEmaDt * 1000.0)
+            + " acc=" + std::to_string(this->lastAcc)
             + " waits=" + std::to_string(semaphores.size()));
     }
     const auto result = presentGenerated(vk, queue, swapchain, next_chain, imageIdx, semaphores,
