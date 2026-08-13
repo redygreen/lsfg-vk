@@ -27,9 +27,9 @@ namespace lsfgvk::layer {
     /// Work time is present-to-present minus the game's acquire wait, so extra
     /// FIFO presents cannot feed back as a fake 45 FPS cap.
     ///
-    /// Integer extras cannot hit every target from a 45 Hz game (1 extra = 90
-    /// displayed). A remainder accumulator spreads extras over time so a 60 FPS
-    /// target actually inserts ~0.33 extras/frame instead of sticking at 0 or 1.
+    /// Accumulates extras (not presents) and clamps the leftover so a 45 Hz game
+    /// at a 90 target stays at genCount=1 instead of flickering 0/1 whenever
+    /// remainder goes negative.
     class AdaptivePacer {
     public:
         using Clock = std::chrono::steady_clock;
@@ -115,14 +115,23 @@ namespace lsfgvk::layer {
                 return out;
             }
 
-            this->acc += target * *this->emaDt;
-            int presents = static_cast<int>(std::lround(this->acc));
-            const int maxPresents = static_cast<int>(maxGen) + 1;
-            presents = std::clamp(presents, 1, maxPresents);
-            this->acc -= static_cast<double>(presents);
-            this->acc = std::clamp(this->acc, -1.15, 1.15);
-
-            const size_t gen = static_cast<size_t>(presents - 1);
+            const double extrasWant = std::clamp(
+                target * *this->emaDt - 1.0, 0.0, static_cast<double>(maxGen));
+            size_t gen = 0;
+            if (extrasWant >= 0.5) {
+                // Need extras on most frames: hold a stable integer. Mixing 0/1
+                // interpolates against a stale source slot and looks like a
+                // wrong/old generated frame.
+                auto rounded = static_cast<size_t>(std::llround(extrasWant));
+                gen = rounded > maxGen ? maxGen : rounded;
+                this->acc = 0.0;
+            } else {
+                this->acc += extrasWant;
+                if (this->acc >= 1.0) {
+                    gen = 1;
+                    this->acc -= 1.0;
+                }
+            }
             this->lastGenCount = gen;
             out.genCount = gen;
             out.acc = this->acc;

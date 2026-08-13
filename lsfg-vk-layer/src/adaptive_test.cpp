@@ -151,7 +151,20 @@ int main() {
     {
         const auto [mean90, frac90] = meanGen(90, 22.222, 90);
         expect(mean90 > 0.9 && mean90 < 1.1, "45 Hz game at 90 target averages ~1 extra");
-        expect(frac90 > 0.9, "45 Hz game at 90 target almost always generates");
+        expect(frac90 > 0.98, "45 Hz game at 90 target does not flicker extras off");
+
+        AdaptivePacer sticky;
+        auto t = t0;
+        sticky.markPresentReturned(t);
+        int dropped = 0;
+        for (int i = 0; i < 60; ++i) {
+            t += 22ms;
+            const auto s = step(sticky, 90, t);
+            sticky.markPresentReturned(t);
+            if (i >= 2 && s.genCount != 1)
+                ++dropped;
+        }
+        expect(dropped == 0, "trained 22 ms / 90 target never drops to genCount 0");
 
         const auto [mean60, frac60] = meanGen(60, 22.222, 90);
         expect(std::abs(mean60 - 1.0 / 3.0) < 0.12,
@@ -160,9 +173,8 @@ int main() {
             "45 Hz game at 60 target inserts extras on some frames");
 
         const auto [mean70, frac70] = meanGen(70, 22.222, 90);
-        expect(std::abs(mean70 - (70.0 / 45.0 - 1.0)) < 0.12,
-            "45 Hz game at 70 target averages ~0.56 extras (no 70 cliff)");
-        expect(frac70 > 0.35, "45 Hz game at 70 target generates on many frames");
+        expect(mean70 > 0.9 && frac70 > 0.98,
+            "45 Hz game at 70 target sticks to 2x instead of 0/1 flicker");
 
         const auto [mean50, _] = meanGen(50, 22.222, 90);
         expect(mean50 > 0.02 && mean50 < 0.25,
