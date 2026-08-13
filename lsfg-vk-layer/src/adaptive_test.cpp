@@ -156,6 +156,10 @@ int main() {
     }
 
     {
+        const auto [meanFifo, fracFifo] = meanGen(90, 22.222, 90, 0.011);
+        expect(meanFifo < 0.05 && fracFifo < 0.05,
+            "FIFO-bound 22 ms interval with 11 ms wait does not generate");
+
         const auto [mean90, frac90] = meanGen(90, 22.222, 90);
         expect(mean90 > 0.9 && mean90 < 1.1, "45 Hz game at 90 target averages ~1 extra");
         expect(frac90 > 0.98, "exact 45 Hz at 90 is a full extra every frame");

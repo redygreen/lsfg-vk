@@ -24,11 +24,14 @@ namespace lsfgvk::layer {
 
     /// Chooses how many interpolated frames to insert for Adaptive FG.
     ///
-    /// Work time is present-to-present minus the game's acquire wait, so extra
-    /// FIFO presents cannot feed back as a fake 45 FPS cap.
+    /// extrasWant = target * realInterval - 1, so 47 real at 90 target yields
+    /// ~0.915 extras/frame (~43 generated). realInterval is present-to-present
+    /// of the game's own frames.
     ///
-    /// Accumulates extras so displayed FPS approaches the target: a 47 Hz game
-    /// at 90 should insert ~0.915 extras/frame (43 generated), not a full 2×.
+    /// Acquire wait is used only to detect FIFO/vsync lock: if the game is
+    /// blocked on the display and GPU work already meets the target, extras
+    /// drop to 0 so we do not cap the game at half refresh. GPU-bound games
+    /// (wait ~ 0, long interval) keep generating.
     class AdaptivePacer {
     public:
         using Clock = std::chrono::steady_clock;
@@ -70,42 +73,41 @@ namespace lsfgvk::layer {
 
             const double target = std::clamp(targetFps, 30.0, 240.0);
 
-            // Loading screen: skip extras this frame, keep EMA / remainder.
             if (gameDt > 0.120) {
                 out.genCount = 0;
                 return out;
             }
 
-            // Outlier vs EMA: hold last decision, do not train.
+            // Waiting on FIFO/vsync, and render work already meets target:
+            // do not generate (avoids locking the game at refresh / (1+extras)).
+            const bool displayBound = out.waitDt > 0.003 && workDt * target <= 1.05;
+            if (displayBound) {
+                this->acc *= 0.35;
+                this->lastGenCount = 0;
+                out.acc = this->acc;
+                out.genCount = 0;
+                return out;
+            }
+
             if (this->emaDt.has_value()) {
                 const double ema = *this->emaDt;
-                if (workDt < 0.003 || workDt > ema * 2.5 || workDt > 0.040) {
+                if (gameDt < 0.003 || (gameDt > 0.040 && gameDt > ema * 1.6)) {
                     out.emaDt = ema;
                     out.genCount = this->lastGenCount;
                     return out;
                 }
-            } else if (workDt < 0.003 || workDt > 0.040) {
+            } else if (gameDt < 0.003 || gameDt > 0.040) {
                 out.genCount = 0;
                 return out;
             }
 
             constexpr double kAlpha = 0.2;
             if (!this->emaDt.has_value())
-                this->emaDt = workDt;
+                this->emaDt = gameDt;
             else
-                this->emaDt = kAlpha * workDt + (1.0 - kAlpha) * *this->emaDt;
+                this->emaDt = kAlpha * gameDt + (1.0 - kAlpha) * *this->emaDt;
             this->emaDt = std::clamp(*this->emaDt, 0.001, 0.25);
             out.emaDt = *this->emaDt;
-
-            // This frame already met the target: no extras, bleed remainder so a
-            // fast frame cannot fire a leftover extra (old error-diffusion bug).
-            if (workDt * target <= 1.05) {
-                this->acc = std::clamp(this->acc * 0.35, 0.0, 0.25);
-                this->lastGenCount = 0;
-                out.acc = this->acc;
-                out.genCount = 0;
-                return out;
-            }
 
             if (maxGen == 0) {
                 this->lastGenCount = 0;
