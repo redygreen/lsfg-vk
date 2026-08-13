@@ -13,7 +13,9 @@ from lsfg_vk.config_schema import ConfigurationManager, DEFAULT_PROFILE_NAME
 
 def main() -> None:
     defaults = ConfigurationManager.get_defaults()
-    defaults["dll"] = "/tmp/Lossless.dll"
+    fake_dll = Path("/tmp/lsfg-vk-test-Lossless.dll")
+    fake_dll.write_bytes(b"")
+    defaults["dll"] = str(fake_dll)
     defaults["adaptive"] = True
     defaults["target_fps"] = 90.0
     defaults["multiplier"] = 4
@@ -37,11 +39,16 @@ def main() -> None:
     assert parsed["target_fps"] == 90.0
     assert parsed["multiplier"] == 4
     assert parsed["no_fp16"] is False
-    assert parsed["dll"] == "/tmp/Lossless.dll"
+    assert parsed["dll"] == str(fake_dll)
 
     clamped = ConfigurationManager.validate_config({"multiplier": 1, "target_fps": 0})
     assert clamped["multiplier"] == 2
     assert clamped["target_fps"] == 1.0
+
+    omitted = ConfigurationManager.get_defaults()
+    omitted["dll"] = "/definitely/missing/Lossless.dll"
+    omitted_toml = ConfigurationManager.generate_toml_content(omitted)
+    assert "dll =" not in omitted_toml, omitted_toml
 
     print("v2 TOML generate/parse OK")
     print(toml)

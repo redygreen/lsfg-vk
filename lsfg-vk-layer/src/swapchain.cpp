@@ -234,7 +234,7 @@ VkResult Swapchain::presentAdaptive(const vk::Vulkan& vk,
     const auto& virtualImage = this->virtualImages.at(imageIdx);
     const auto& sourceImage = this->sourceImages.at(this->fidx % 2);
 
-    if (this->fidx && !this->copyFence->wait(vk, 150ULL * 1000 * 1000))
+    if (this->fidx && !this->copyFence->wait(vk, 2ULL * 1000 * 1000 * 1000))
         throw ls::vulkan_error(VK_TIMEOUT, "vkWaitForFences() failed");
     this->copyFence->reset(vk);
 
@@ -276,7 +276,7 @@ VkResult Swapchain::presentAdaptive(const vk::Vulkan& vk,
             this->copyFence->handle()
         );
     }
-    if (!this->copyFence->wait(vk, 150ULL * 1000 * 1000))
+    if (!this->copyFence->wait(vk, 2ULL * 1000 * 1000 * 1000))
         throw ls::vulkan_error(VK_TIMEOUT, "vkWaitForFences() failed");
 
     const RealFrame frame{
@@ -394,16 +394,18 @@ void Swapchain::presentOutput(const vk::Vulkan& vk, VkImage src,
     auto& pass = this->passes.at(0);
     auto& pcs = this->postCopySemaphores.at(this->idx % this->postCopySemaphores.size());
 
-    if (this->idx > 1 && !this->renderFence->wait(vk, 150ULL * 1000 * 1000))
+    if (this->idx > 1 && !this->renderFence->wait(vk, 2ULL * 1000 * 1000 * 1000))
         throw ls::vulkan_error(VK_TIMEOUT, "vkWaitForFences() failed");
     this->renderFence->reset(vk);
 
     uint32_t aqImageIdx{};
     auto res = vk.df().AcquireNextImageKHR(vk.dev(), this->realSwapchain,
-        UINT64_MAX, pass.acquireSemaphore.handle(),
+        100ULL * 1000 * 1000, pass.acquireSemaphore.handle(),
         VK_NULL_HANDLE,
         &aqImageIdx
     );
+    if (res == VK_TIMEOUT || res == VK_NOT_READY)
+        return;
     if (res != VK_SUCCESS && res != VK_SUBOPTIMAL_KHR)
         throw ls::vulkan_error(res, "vkAcquireNextImageKHR() failed");
 

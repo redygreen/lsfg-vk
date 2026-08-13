@@ -43,7 +43,9 @@ To rebuild the zip after changing the plugin or layer:
 5. Add `~/lsfg-vk-adaptive %command%` to the game's Steam launch options.
 6. Restart the game after switching Adaptive on or off.
 
-Do **not** also add `~/lsfg %command%` on the same game. Uninstalling this plugin only removes Adaptive files; the official plugin's `~/lsfg` and 1.x layer stay in place.
+Do **not** also add `~/lsfg %command%` on the same game. The Adaptive wrapper sets `DISABLE_LSFG=1` so the official 1.x layer is ignored even if that plugin is still installed. After updating the plugin zip, open LSFG Adaptive and click Install again (or toggle any setting) so `~/lsfg-vk-adaptive` is rewritten.
+
+If a game black-screens and exits: turn **Adaptive** off, keep Max Multiplier at 2×, and restart the game. Adaptive on Gamescope is still experimental.
 
 ## License
 

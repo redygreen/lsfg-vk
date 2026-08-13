@@ -49,7 +49,7 @@ CONFIG_SCHEMA_DEF = {
     "adaptive": {
         "name": "adaptive",
         "fieldType": ConfigFieldType.BOOLEAN,
-        "default": True,
+        "default": False,
         "description": "present on a target-FPS clock instead of a fixed multiplier",
         "location": "toml"
     },

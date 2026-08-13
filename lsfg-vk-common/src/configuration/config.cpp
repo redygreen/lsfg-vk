@@ -108,13 +108,13 @@ namespace {
     }
     /// parse the global configuration
     GlobalConf parseGlobalConf(const toml::table& tbl) {
-        const GlobalConf conf{
+        GlobalConf conf{
             .dll = tbl["dll"].value<std::string>(),
             .allow_fp16 = tbl["allow_fp16"].value_or(true)
         };
 
         if (conf.dll && !std::filesystem::exists(*conf.dll))
-            throw ls::error("path to dll is invalid");
+            conf.dll = std::nullopt;
 
         return conf;
     }

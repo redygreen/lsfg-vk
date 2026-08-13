@@ -17,7 +17,7 @@ export function AdaptiveControls({
       <PanelSectionRow>
         <ToggleField
           label={t('CONFIG_ADAPTIVE', 'Adaptive Frame Generation')}
-          description={t('CONFIG_ADAPTIVE_DESC', 'Present on a target-FPS clock. Multiplier is only a ceiling. Restart the game after toggling.')}
+          description={t('CONFIG_ADAPTIVE_DESC', 'Present on a target-FPS clock. Multiplier is only a ceiling. Restart the game after toggling. If the game black-screens, leave this off.')}
           checked={config.adaptive}
           onChange={(value) => onConfigChange(ADAPTIVE, value)}
         />

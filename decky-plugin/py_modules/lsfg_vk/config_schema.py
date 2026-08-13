@@ -131,10 +131,8 @@ class ConfigurationManager:
                 # If detection fails, keep empty default
                 logging.getLogger(__name__).debug(f"DLL detection failed: {e}")
         
-        # If DLL path is still empty, use a reasonable fallback
-        if not defaults["dll"]:
-            defaults["dll"] = "/home/deck/.local/share/Steam/steamapps/common/Lossless Scaling/Lossless.dll"
-        
+        # If detection fails, leave empty so lsfg-vk auto-detects instead of
+        # writing a path that does not exist (that aborts layer init).
         return defaults
     
     @staticmethod
@@ -209,7 +207,7 @@ class ConfigurationManager:
         lines.append("")
 
         dll_path = profile_data["global_config"].get("dll", "")
-        if dll_path:
+        if dll_path and Path(str(dll_path)).exists():
             lines.append("# specify where Lossless.dll is stored")
             lines.append(f'dll = "{dll_path}"')
         lines.append("")

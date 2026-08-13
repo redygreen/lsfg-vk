@@ -55,7 +55,7 @@ export const CONFIG_SCHEMA: Record<string, ConfigField> = {
   adaptive: {
     name: "adaptive",
     fieldType: ConfigFieldType.BOOLEAN,
-    default: true,
+    default: false,
     description: "present on a target-FPS clock instead of a fixed multiplier"
   },
   target_fps: {
@@ -155,7 +155,7 @@ export function getDefaults(): ConfigurationData {
     dll: "/games/Lossless Scaling/Lossless.dll",
     no_fp16: false,
     multiplier: 2,
-    adaptive: true,
+    adaptive: false,
     target_fps: 60.0,
     flow_scale: 0.8,
     performance_mode: false,

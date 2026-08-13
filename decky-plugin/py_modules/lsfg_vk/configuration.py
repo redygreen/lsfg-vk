@@ -124,6 +124,9 @@ class ConfigurationService(BaseService):
         generate_script_lines = get_script_generation_logic()
         lines.extend(generate_script_lines(config))
         
+        # Official decky-lsfg-vk 1.x uses DISABLE_LSFG. Both implicit layers
+        # loaded at once black-screen and crash the game.
+        lines.append("export DISABLE_LSFG=1")
         lines.append(f'export LSFGVK_CONFIG="{self.config_file_path}"')
         lines.append(f'export LSFGVK_PROFILE={DEFAULT_PROFILE_NAME}')
         lines.extend(self._generate_game_launch_lines())
@@ -155,6 +158,7 @@ class ConfigurationService(BaseService):
         generate_script_lines = get_script_generation_logic()
         lines.extend(generate_script_lines(merged_config))
         
+        lines.append("export DISABLE_LSFG=1")
         lines.append(f'export LSFGVK_CONFIG="{self.config_file_path}"')
         lines.append(f"export LSFGVK_PROFILE={current_profile}")
         lines.extend(self._generate_game_launch_lines())
