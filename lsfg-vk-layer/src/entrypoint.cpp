@@ -499,7 +499,7 @@ namespace {
 __attribute__((visibility("default")))
 VkResult vkNegotiateLoaderLayerInterfaceVersion(VkNegotiateLayerInterface* pVersionStruct) {
     layerLog("lsfg-vk: vkNegotiate begin");
-    layerLog("lsfg-vk: adaptive build=pacer-v11");
+    layerLog("lsfg-vk: adaptive build=pacer-v12");
 
     // ensure loader compatibility
     if (!pVersionStruct

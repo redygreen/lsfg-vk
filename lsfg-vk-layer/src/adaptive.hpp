@@ -25,8 +25,15 @@ namespace lsfgvk::layer {
     /// Chooses how many interpolated frames to insert for Adaptive FG.
     ///
     /// extrasWant = target * realInterval - 1, so 47 real at 90 target yields
-    /// ~0.915 extras/frame (~43 generated). realInterval is present-to-present
-    /// of the game's own frames.
+    /// ~0.915 extras/frame (~43 generated). That is floor(T / targetDt) - 1
+    /// plus a remainder so fractional extras average correctly (16 ms at 90
+    /// needs 0.44 extras, not 0).
+    ///
+    /// Generate exactly that many frames between the last two *consecutive*
+    /// real sources (timestamps (i+1)/(n+1)). Always generating the multiplier
+    /// ceiling would put extras at 1/4, 2/4, 3/4 instead of 1/2 when only one
+    /// extra is shown, and the extra GPU work lowers real FPS further from
+    /// target.
     ///
     /// Acquire wait is used only to detect FIFO/vsync lock: if the game is
     /// blocked on the display and GPU work already meets the target, extras

@@ -86,6 +86,13 @@ namespace lsfgvk::layer {
             const std::vector<VkSemaphore>& semaphores,
             size_t genCount,
             const VkPresentInfoKHR* originalInfo);
+        void waitRenderFence(const vk::Vulkan& vk);
+        void blitGameToSource(const vk::Vulkan& vk, VkImage swapchainImage,
+            const std::vector<VkSemaphore>& waitSemaphores, bool signalSync);
+        VkResult presentReal(const vk::Vulkan& vk, VkQueue queue,
+            VkSwapchainKHR swapchain, void* next_chain, uint32_t imageIdx,
+            const std::vector<VkSemaphore>& waitSemaphores,
+            const VkPresentInfoKHR* originalInfo);
         void forceFifo(void* next_chain) const;
 
         std::vector<vk::Image> sourceImages;
