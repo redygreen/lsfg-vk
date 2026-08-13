@@ -62,8 +62,8 @@ namespace lsfgvk::layer {
         /// @param next_chain next chain pointer for the present info (WARN: shared!)
         /// @param imageIdx swapchain image index to present to
         /// @param semaphores semaphores to wait on before presenting
-        /// @param originalInfo original QueuePresent info; used unchanged for Adaptive
-        ///                     passthrough so present fences / pResults stay intact
+        /// @param originalInfo original QueuePresent info; Adaptive never
+        ///                     replaces these wait semaphores
         /// @throws ls::vulkan_error on vulkan errors
         VkResult present(const vk::Vulkan& vk,
             VkQueue queue, VkSwapchainKHR swapchain,
@@ -77,22 +77,18 @@ namespace lsfgvk::layer {
         [[nodiscard]] bool runtimeProfileCompatible(const ls::GameConf& next) const;
 
     private:
-        /// Choose how many generated frames to insert for Adaptive.
-        /// Uses game time outside present() vs target_fps; multiplier is a ceiling.
-        [[nodiscard]] size_t chooseGeneratedCount();
-        VkResult presentGenerated(const vk::Vulkan& vk,
-            VkQueue queue, VkSwapchainKHR swapchain,
-            void* next_chain, uint32_t imageIdx,
-            const std::vector<VkSemaphore>& semaphores,
-            size_t genCount,
-            const VkPresentInfoKHR* originalInfo);
-        void waitRenderFence(const vk::Vulkan& vk);
-        void blitGameToSource(const vk::Vulkan& vk, VkImage swapchainImage,
-            const std::vector<VkSemaphore>& waitSemaphores, bool signalSync);
-        VkResult presentReal(const vk::Vulkan& vk, VkQueue queue,
+        [[nodiscard]] size_t chooseGeneratedCount(AdaptivePacer::Clock::time_point now);
+        VkResult queuePresentOriginal(const vk::Vulkan& vk, VkQueue queue,
             VkSwapchainKHR swapchain, void* next_chain, uint32_t imageIdx,
-            const std::vector<VkSemaphore>& waitSemaphores,
+            const std::vector<VkSemaphore>& semaphores,
             const VkPresentInfoKHR* originalInfo);
+        void waitFence(const vk::Vulkan& vk, const vk::Fence& fence, bool& inFlight);
+        void copyToSource(const vk::Vulkan& vk, VkImage swapchainImage,
+            const std::vector<VkSemaphore>& waitSemaphores, bool signalSync,
+            VkFence fence);
+        VkResult presentGeneratedFrames(const vk::Vulkan& vk, VkQueue queue,
+            VkSwapchainKHR swapchain, void* next_chain, uint32_t imageIdx,
+            size_t genCount, bool presentRealWithInternalSemaphores);
         void forceFifo(void* next_chain) const;
 
         std::vector<vk::Image> sourceImages;
@@ -125,6 +121,7 @@ namespace lsfgvk::layer {
         double lastAcc{0.0};
         size_t logPresentsRemaining{16};
         bool renderFenceInFlight{false};
+        bool copyFenceInFlight{false};
     };
 
 }

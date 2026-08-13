@@ -10,7 +10,7 @@
 
 namespace lsfgvk::layer {
 
-    /// Timing of the game's own vkAcquireNextImageKHR (not layer-internal acquires).
+    /// Wait time of the game's own vkAcquireNextImageKHR (not layer extras).
     struct GameAcquireTiming {
         static void noteWait(double seconds) { waitSec = seconds; }
         static double takeWait() {
@@ -22,23 +22,15 @@ namespace lsfgvk::layer {
         static inline double waitSec{0.0};
     };
 
-    /// Chooses how many interpolated frames to insert for Adaptive FG.
+    /// How many interpolated frames to insert before this real present.
     ///
-    /// extrasWant = target * realInterval - 1, so 47 real at 90 target yields
-    /// ~0.915 extras/frame (~43 generated). That is floor(T / targetDt) - 1
-    /// plus a remainder so fractional extras average correctly (16 ms at 90
-    /// needs 0.44 extras, not 0).
+    /// extras = target * interval − 1, dithered with a remainder so 16 ms at
+    /// 90 Hz averages 0.44 extras (not stuck at 0). multiplier is a ceiling.
     ///
-    /// Generate exactly that many frames between the last two *consecutive*
-    /// real sources (timestamps (i+1)/(n+1)). Always generating the multiplier
-    /// ceiling would put extras at 1/4, 2/4, 3/4 instead of 1/2 when only one
-    /// extra is shown, and the extra GPU work lowers real FPS further from
-    /// target.
-    ///
-    /// Acquire wait is used only to detect FIFO/vsync lock: if the game is
-    /// blocked on the display and GPU work already meets the target, extras
-    /// drop to 0 so we do not cap the game at half refresh. GPU-bound games
-    /// (wait ~ 0, long interval) keep generating.
+    /// Interval is present-to-present of the game's QueuePresent calls.
+    /// A long acquire wait plus already-fast GPU work means the game is
+    /// vsync-bound at the target: insert nothing (otherwise 2× locks it at
+    /// half refresh). GPU-bound frames (wait ≈ 0, long interval) generate.
     class AdaptivePacer {
     public:
         using Clock = std::chrono::steady_clock;
@@ -58,78 +50,56 @@ namespace lsfgvk::layer {
             out.waitDt = acquireWaitSec < 0.0 ? 0.0 : acquireWaitSec;
             out.acc = this->acc;
             out.emaDt = this->emaDt.value_or(0.0);
-            out.genCount = this->lastGenCount;
 
-            if (!this->presentReturnedAt.has_value()) {
-                this->emaDt.reset();
-                this->lastGenCount = 0;
+            if (!this->frameAt.has_value()) {
                 this->acc = 0.0;
                 out.genCount = 0;
-                out.acc = 0.0;
                 return out;
             }
 
-            const double gameDt = std::chrono::duration<double>(
-                now - *this->presentReturnedAt).count();
-            out.gameDt = gameDt;
+            const double dt = std::chrono::duration<double>(now - *this->frameAt).count();
+            out.gameDt = dt;
 
-            double workDt = gameDt - out.waitDt;
+            double workDt = dt - out.waitDt;
             if (workDt < 0.0005)
-                workDt = gameDt;
+                workDt = dt;
             out.workDt = workDt;
 
             const double target = std::clamp(targetFps, 30.0, 240.0);
 
-            if (gameDt > 0.120) {
+            // Loading hitch, or a same-timestamp probe.
+            if (dt > 0.100 || dt < 0.001) {
                 out.genCount = 0;
                 return out;
             }
 
-            // Waiting on FIFO/vsync, and render work already meets target:
-            // do not generate (avoids locking the game at refresh / (1+extras)).
-            const bool displayBound = out.waitDt > 0.003 && workDt * target <= 1.05;
-            if (displayBound) {
+            // Vsync-bound at (or above) target: extra presents would lock
+            // the game at refresh / (1 + extras).
+            if (out.waitDt > 0.003 && workDt * target <= 1.05) {
                 this->acc *= 0.35;
-                this->lastGenCount = 0;
                 out.acc = this->acc;
                 out.genCount = 0;
                 return out;
             }
 
-            // This present already met the target. Do not train EMA on it —
-            // a burst of 3–5 ms returns would collapse extras to 0 forever.
-            // Ignore gameDt == 0 (same-timestamp probes / clock ties).
-            if (gameDt > 1e-6 && gameDt * target <= 1.0) {
-                this->lastGenCount = 0;
-                out.genCount = 0;
+            // Too fast to be a real game frame. Do not train EMA (a burst of
+            // 3–5 ms presents would otherwise collapse extras to 0 forever).
+            if (dt * target <= 1.0) {
                 out.acc = this->acc;
-                return out;
-            }
-
-            if (this->emaDt.has_value()) {
-                const double ema = *this->emaDt;
-                if (gameDt < 0.003 || (gameDt > 0.040 && gameDt > ema * 1.6)) {
-                    out.emaDt = ema;
-                    out.genCount = this->lastGenCount;
-                    return out;
-                }
-            } else if (gameDt < 0.003 || gameDt > 0.040) {
                 out.genCount = 0;
                 return out;
             }
 
             constexpr double kAlpha = 0.2;
             if (!this->emaDt.has_value())
-                this->emaDt = gameDt;
+                this->emaDt = dt;
             else
-                this->emaDt = kAlpha * gameDt + (1.0 - kAlpha) * *this->emaDt;
+                this->emaDt = kAlpha * dt + (1.0 - kAlpha) * *this->emaDt;
             this->emaDt = std::clamp(*this->emaDt, 0.001, 0.25);
             out.emaDt = *this->emaDt;
 
             if (maxGen == 0) {
-                this->lastGenCount = 0;
                 out.genCount = 0;
-                out.acc = this->acc;
                 return out;
             }
 
@@ -140,22 +110,18 @@ namespace lsfgvk::layer {
             extra = std::clamp(extra, 0, static_cast<int>(maxGen));
             this->acc -= static_cast<double>(extra);
             this->acc = std::clamp(this->acc, 0.0, 0.999);
-
-            const size_t gen = static_cast<size_t>(extra);
-            this->lastGenCount = gen;
-            out.genCount = gen;
+            out.genCount = static_cast<size_t>(extra);
             out.acc = this->acc;
             return out;
         }
 
-        void markPresentReturned(Clock::time_point now) {
-            this->presentReturnedAt = now;
+        void markFrame(Clock::time_point now) {
+            this->frameAt = now;
         }
 
     private:
-        std::optional<Clock::time_point> presentReturnedAt;
+        std::optional<Clock::time_point> frameAt;
         std::optional<double> emaDt;
-        size_t lastGenCount{0};
         double acc{0.0};
     };
 
