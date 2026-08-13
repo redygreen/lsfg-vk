@@ -141,8 +141,11 @@ size_t Swapchain::chooseGeneratedCount() {
     const auto sample = this->pacer.choose(
         static_cast<double>(this->profile.target_fps),
         this->destinationImages.size(),
-        AdaptivePacer::Clock::now());
+        AdaptivePacer::Clock::now(),
+        GameAcquireTiming::takeWait());
     this->lastGameDt = sample.gameDt;
+    this->lastWorkDt = sample.workDt;
+    this->lastWaitDt = sample.waitDt;
     this->lastEmaDt = sample.emaDt;
     return sample.genCount;
 }
@@ -186,6 +189,8 @@ VkResult Swapchain::present(const vk::Vulkan& vk,
         layerLog("lsfg-vk: adaptive present fidx=" + std::to_string(this->fidx)
             + " genCount=" + std::to_string(genCount)
             + " game_ms=" + std::to_string(this->lastGameDt * 1000.0)
+            + " work_ms=" + std::to_string(this->lastWorkDt * 1000.0)
+            + " wait_ms=" + std::to_string(this->lastWaitDt * 1000.0)
             + " ema_ms=" + std::to_string(this->lastEmaDt * 1000.0)
             + " waits=" + std::to_string(semaphores.size()));
     }

@@ -10,12 +10,23 @@
 
 namespace lsfgvk::layer {
 
+    /// Timing of the game's own vkAcquireNextImageKHR (not layer-internal acquires).
+    struct GameAcquireTiming {
+        static void noteWait(double seconds) { waitSec = seconds; }
+        static double takeWait() {
+            const double w = waitSec;
+            waitSec = 0.0;
+            return w;
+        }
+    private:
+        static inline double waitSec{0.0};
+    };
+
     /// Chooses how many interpolated frames to insert for Adaptive FG.
     ///
-    /// Interval is the time the game spent *outside* present() — simulation,
-    /// render, and the game's own acquire. Extra generated presents are
-    /// excluded so genCount cannot feed back into itself and run away to the
-    /// multiplier ceiling.
+    /// Uses GPU/CPU work time (present-to-present minus the game's acquire wait)
+    /// so extra FIFO presents cannot feed back as a fake 45 FPS cap. Integer
+    /// genCount is held with hysteresis to avoid 0/1 flicker (uneven frametime).
     class AdaptivePacer {
     public:
         using Clock = std::chrono::steady_clock;
@@ -23,13 +34,17 @@ namespace lsfgvk::layer {
         struct Sample {
             size_t genCount{0};
             double gameDt{0.0};
+            double workDt{0.0};
+            double waitDt{0.0};
             double emaDt{0.0};
         };
 
-        [[nodiscard]] Sample choose(double targetFps, size_t maxGen, Clock::time_point now) {
+        [[nodiscard]] Sample choose(double targetFps, size_t maxGen,
+                Clock::time_point now, double acquireWaitSec = 0.0) {
             Sample out{};
+            out.waitDt = acquireWaitSec < 0.0 ? 0.0 : acquireWaitSec;
+
             if (!this->presentReturnedAt.has_value()) {
-                this->adaptiveError = 0.0;
                 this->emaDt.reset();
                 this->lastGenCount = 0;
                 return out;
@@ -39,40 +54,41 @@ namespace lsfgvk::layer {
                 now - *this->presentReturnedAt).count();
             out.gameDt = gameDt;
 
-            // Ignore hitches and implausibly fast presents; do not train the EMA.
-            if (gameDt < 0.0005 || gameDt > 0.100) {
-                this->adaptiveError = 0.0;
-                this->emaDt.reset();
-                this->lastGenCount = 0;
+            double workDt = gameDt - out.waitDt;
+            if (workDt < 0.0005)
+                workDt = gameDt;
+            out.workDt = workDt;
+
+            // Loading hitch: passthrough this frame, keep EMA / last gen.
+            if (gameDt > 0.080) {
+                out.emaDt = this->emaDt.value_or(0.0);
+                out.genCount = 0;
                 return out;
             }
 
-            constexpr double kAlpha = 0.25;
+            // Outlier vs EMA: hold last decision, do not train.
+            if (this->emaDt.has_value()) {
+                const double ema = *this->emaDt;
+                if (workDt < 0.003 || workDt > ema * 2.5 || workDt > 0.040) {
+                    out.emaDt = ema;
+                    out.genCount = this->lastGenCount;
+                    return out;
+                }
+            } else if (workDt < 0.003 || workDt > 0.040) {
+                out.genCount = 0;
+                return out;
+            }
+
+            constexpr double kAlpha = 0.2;
             if (!this->emaDt.has_value())
-                this->emaDt = gameDt;
+                this->emaDt = workDt;
             else
-                this->emaDt = kAlpha * gameDt + (1.0 - kAlpha) * *this->emaDt;
+                this->emaDt = kAlpha * workDt + (1.0 - kAlpha) * *this->emaDt;
             out.emaDt = *this->emaDt;
 
             const double target = std::max(1.0, targetFps);
-            double desired = target * *this->emaDt - 1.0 + this->adaptiveError;
-            if (desired < 0.0)
-                desired = 0.0;
-
-            auto gen = static_cast<size_t>(std::llround(desired));
-            if (gen > maxGen)
-                gen = maxGen;
-
-            // At most one generated-frame step per real frame.
-            if (gen > this->lastGenCount + 1)
-                gen = this->lastGenCount + 1;
-            else if (this->lastGenCount > 0 && gen + 1 < this->lastGenCount)
-                gen = this->lastGenCount - 1;
-
-            this->adaptiveError = desired - static_cast<double>(gen);
-            if (gen == maxGen && this->adaptiveError > 0.0)
-                this->adaptiveError = 0.0;
-
+            const double extras = target * *this->emaDt - 1.0;
+            const size_t gen = pickGen(extras, maxGen);
             this->lastGenCount = gen;
             out.genCount = gen;
             return out;
@@ -83,9 +99,32 @@ namespace lsfgvk::layer {
         }
 
     private:
+        [[nodiscard]] size_t pickGen(double extras, size_t maxGen) const {
+            size_t want = 0;
+            if (extras > 0.0) {
+                auto rounded = static_cast<size_t>(std::llround(extras));
+                if (rounded > maxGen)
+                    rounded = maxGen;
+                want = rounded;
+            }
+
+            const size_t last = this->lastGenCount;
+            constexpr double kBand = 0.55;
+            if (want > last) {
+                if (extras >= static_cast<double>(last) + kBand)
+                    return last + 1 > maxGen ? maxGen : last + 1;
+                return last;
+            }
+            if (want < last) {
+                if (last > 0 && extras <= static_cast<double>(last) - kBand)
+                    return last - 1;
+                return last;
+            }
+            return want > maxGen ? maxGen : want;
+        }
+
         std::optional<Clock::time_point> presentReturnedAt;
         std::optional<double> emaDt;
-        double adaptiveError{0.0};
         size_t lastGenCount{0};
     };
 

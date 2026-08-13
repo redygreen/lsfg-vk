@@ -112,6 +112,8 @@ namespace lsfgvk::layer {
 
         AdaptivePacer pacer;
         double lastGameDt{0.0};
+        double lastWorkDt{0.0};
+        double lastWaitDt{0.0};
         double lastEmaDt{0.0};
         size_t logPresentsRemaining{16};
         bool renderFenceInFlight{false};

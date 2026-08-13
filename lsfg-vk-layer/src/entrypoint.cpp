@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -448,8 +449,11 @@ namespace {
         if (n < 8)
             layerLog("lsfg-vk: acquire begin n=" + std::to_string(n));
 
+        const auto t0 = AdaptivePacer::Clock::now();
         auto res = it->second.df().AcquireNextImageKHR(device, swapchain, timeout,
             semaphore, fence, idx);
+        const auto t1 = AdaptivePacer::Clock::now();
+        GameAcquireTiming::noteWait(std::chrono::duration<double>(t1 - t0).count());
 
         if (n < 8)
             layerLog("lsfg-vk: acquire ok n=" + std::to_string(n)
@@ -495,7 +499,7 @@ namespace {
 __attribute__((visibility("default")))
 VkResult vkNegotiateLoaderLayerInterfaceVersion(VkNegotiateLayerInterface* pVersionStruct) {
     layerLog("lsfg-vk: vkNegotiate begin");
-    layerLog("lsfg-vk: adaptive build=stats-v5");
+    layerLog("lsfg-vk: adaptive build=pacer-v6");
 
     // ensure loader compatibility
     if (!pVersionStruct
