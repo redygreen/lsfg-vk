@@ -19,7 +19,7 @@
   "CONFIG_HDR_MODE": "HDR Mode",
   "CONFIG_HDR_MODE_DESC": "Enables HDR mode (only for games that support HDR)",
   "CONFIG_ENABLE_WSI": "Enable WSI",
-  "CONFIG_ENABLE_WSI_DESC": "Leave off on Steam Deck. Gamescope WSI hides generated frames (overlay FPS rises, motion stays at real FPS). Requires restart.",
+  "CONFIG_ENABLE_WSI_DESC": "Re-Enable Gamescope WSI Layer. Requires game restart to apply.",
   "CONFIG_ENABLE_WOW64": "Enable WOW64 for 32-bit games",
   "CONFIG_ENABLE_WOW64_DESC": "Enables PROTON_USE_WOW64=1 for 32-bit games (Use with ProtonGE to fix crashing)",
   "CONFIG_DISABLE_STEAMDECK_MODE": "Disable Steam Deck Mode",

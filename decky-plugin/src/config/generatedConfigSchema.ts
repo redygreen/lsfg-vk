@@ -123,7 +123,7 @@ export const CONFIG_SCHEMA: Record<string, ConfigField> = {
     name: "enable_wsi",
     fieldType: ConfigFieldType.BOOLEAN,
     default: false,
-    description: "Leave off on Steam Deck. Gamescope WSI coalesces extra+real presents: overlay shows generated FPS but motion stays at real FPS."
+    description: "Enable Gamescope WSI Layer, disable if frame generation isn't applying or isn't feeling smooth (use with HDR off)"
   },
   enable_zink: {
     name: "enable_zink",

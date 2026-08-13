@@ -136,9 +136,7 @@ Swapchain::Swapchain(const vk::Vulkan& vk, backend::Instance& backend,
     if (this->profile.adaptive) {
         layerLog("lsfg-vk: adaptive mode presents on the game thread (target_fps="
             + std::to_string(this->profile.target_fps)
-            + ", multiplier ceiling=" + std::to_string(this->profile.multiplier)
-            + ", presentMode=" + std::to_string(this->info.presentMode)
-            + ", images=" + std::to_string(this->info.images.size()) + ")");
+            + ", multiplier ceiling=" + std::to_string(this->profile.multiplier) + ")");
     }
 }
 
@@ -191,7 +189,6 @@ VkResult Swapchain::present(const vk::Vulkan& vk,
         const std::vector<VkSemaphore>& semaphores,
         const VkPresentInfoKHR* originalInfo) {
     const auto now = AdaptivePacer::Clock::now();
-    this->lastPacedMs = 0.0;
     const size_t genCount = !this->profile.enabled
         ? 0
         : this->profile.adaptive
@@ -232,24 +229,31 @@ VkResult Swapchain::present(const vk::Vulkan& vk,
             // Skip copies wait the game's render semaphores, then
             // QueuePresent waits copy-done only — binary semaphores cannot
             // be waited by both the blit and the original present.
-            // Skips never run LSFG, so FG work tracks generated frames
-            // (57 real + 33 generated → fg_fps ≈ 33, not 57).
+            //
+            // Optical-flow ingest runs only on dithered skips (a generate
+            // is coming). Skips at/above target are copy-only so Adaptive
+            // does not run LSFG at native rate.
             waitFence(vk, *this->copyFence, this->copyFenceInFlight);
             waitFence(vk, *this->renderFence, this->renderFenceInFlight);
 
             if (this->fidx == 0 || genCount == 0) {
                 forceFifo(next_chain);
-                this->instance.get().scheduleFrames(this->ctx.get(), 0);
+                const bool ingest = this->fidx != 0 && this->lastIngest;
+                if (ingest)
+                    this->instance.get().scheduleIngest(this->ctx.get());
+                else
+                    this->instance.get().scheduleFrames(this->ctx.get(), 0);
                 const VkSemaphore copyDone =
                     this->copyDoneSemaphores.at(this->fidx % 2).handle();
-                copyToSource(vk, swapchainImage, semaphores, false, copyDone,
+                copyToSource(vk, swapchainImage, semaphores, ingest, copyDone,
                     this->copyFence->handle());
                 this->copyFenceInFlight = true;
-                waitDisplaySlot();
                 result = queuePresentOriginal(vk, queue, swapchain, next_chain, imageIdx,
                     semaphores, originalInfo, copyDone, true);
                 if (this->logPresentsRemaining > 0)
-                    layerLog("lsfg-vk: adaptive cheap skip present ok res="
+                    layerLog(std::string(ingest
+                            ? "lsfg-vk: adaptive ingest skip present ok res="
+                            : "lsfg-vk: adaptive cheap skip present ok res=")
                         + std::to_string(static_cast<int>(result)));
             } else {
                 this->instance.get().scheduleFrames(this->ctx.get(), genCount);
@@ -261,20 +265,13 @@ VkResult Swapchain::present(const vk::Vulkan& vk,
             }
         }
     } catch (...) {
-        const auto paced = std::chrono::duration_cast<AdaptivePacer::Clock::duration>(
-            std::chrono::duration<double>(this->lastPacedMs / 1000.0));
-        this->pacer.markFrame(now + paced);
+        this->pacer.markFrame(now);
         this->fidx++;
         throw;
     }
 
-    const auto paced = std::chrono::duration_cast<AdaptivePacer::Clock::duration>(
-        std::chrono::duration<double>(this->lastPacedMs / 1000.0));
-    this->pacer.markFrame(now + paced);
+    this->pacer.markFrame(now);
     this->fidx++;
-    if (logThis)
-        layerLog("lsfg-vk: adaptive present done genCount=" + std::to_string(genCount)
-            + " paced_ms=" + std::to_string(this->lastPacedMs));
     recordFrameStats(genCount,
         this->profile.adaptive && this->lastIngest && genCount == 0,
         this->profile.target_fps, this->profile.adaptive);
@@ -452,7 +449,6 @@ VkResult Swapchain::presentGeneratedFrames(const vk::Vulkan& vk,
         if (i == genCount - 1)
             this->renderFenceInFlight = true;
 
-        waitDisplaySlot();
         const VkPresentInfoKHR presentInfo{
             .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
             .pNext = i ? nullptr : next_chain,
@@ -473,7 +469,6 @@ VkResult Swapchain::presentGeneratedFrames(const vk::Vulkan& vk,
         return res;
 
     auto& lastPCS = this->postCopySemaphores.at((this->idx - 1) % this->postCopySemaphores.size());
-    waitDisplaySlot();
     const VkPresentInfoKHR presentInfo{
         .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
         .waitSemaphoreCount = 1,
@@ -486,13 +481,6 @@ VkResult Swapchain::presentGeneratedFrames(const vk::Vulkan& vk,
     if (res != VK_SUCCESS && res != VK_SUBOPTIMAL_KHR)
         throw ls::vulkan_error(res, "vkQueuePresentKHR() failed");
     return res;
-}
-
-void Swapchain::waitDisplaySlot() {
-    if (!this->profile.adaptive)
-        return;
-    this->lastPacedMs += this->slotPacer.wait(
-        static_cast<double>(this->profile.target_fps)) * 1000.0;
 }
 
 void Swapchain::forceFifo(void* next_chain) const {

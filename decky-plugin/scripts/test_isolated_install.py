@@ -81,7 +81,6 @@ def test_wrapper_sets_isolated_layer_path():
         assert "lsfg-vk.log" in script
         assert "lsfg-vk-layer.log" in script
         assert "export LSFGVK_LOG=" in script
-        assert "export ENABLE_GAMESCOPE_WSI=0" in script
         assert "argc=$#" in script
 
 

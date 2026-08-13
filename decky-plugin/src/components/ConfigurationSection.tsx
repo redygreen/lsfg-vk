@@ -203,7 +203,7 @@ export function ConfigurationSection({
         <PanelSectionRow>
             <ToggleField
               label={t('CONFIG_ENABLE_WSI', 'Enable WSI')}
-              description={t('CONFIG_ENABLE_WSI_DESC', 'Leave off on Steam Deck. Gamescope WSI hides generated frames (overlay FPS rises, motion stays at real FPS). Requires restart.')}
+              description={t('CONFIG_ENABLE_WSI_DESC', 'Re-Enable Gamescope WSI Layer. Requires game restart to apply.')}
               checked={config.enable_wsi}
               onChange={(value) => onConfigChange(ENABLE_WSI, value)}
             />

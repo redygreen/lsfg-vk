@@ -63,11 +63,12 @@ int main() {
         pacer.markFrame(t0);
 
         auto s = step(pacer, 90, t0 + 22ms);
-        expect(s.genCount == 0, "first 22 ms at 90 banks a 0.98 extra");
+        expect(s.genCount == 1, "first 22 ms at 90 snaps to a stable extra");
+        expect(!s.ingest, "stable extra does not ingest");
         pacer.markFrame(t0 + 22ms);
 
         s = step(pacer, 90, t0 + 44ms);
-        expect(s.genCount == 1, "remainder then inserts the extra");
+        expect(s.genCount == 1, "45 Hz at 90 stays at 1 extra");
     }
 
     {
@@ -129,13 +130,12 @@ int main() {
         pacer.markFrame(t);
         t += duration_cast<Clock::duration>(duration<double>(1.0 / 45.0));
         expect(step(pacer, 90, t).genCount == 1, "exact 45 Hz settles at 1 extra");
-    }
-
-    {
-        const auto [mean120, frac120] = meanGen(120, 22.222, 90);
-        expect(std::abs(mean120 - (120.0 / 45.0 - 1.0)) < 0.15,
-            "45 Hz game at 120 target averages ~1.67 extras");
-        expect(frac120 > 0.98, "45 Hz at 120 always generates at least once");
+        pacer.markFrame(t);
+        t += duration_cast<Clock::duration>(duration<double>(1.0 / 45.0));
+        (void)step(pacer, 120, t);
+        pacer.markFrame(t);
+        t += duration_cast<Clock::duration>(duration<double>(1.0 / 45.0));
+        expect(step(pacer, 120, t).genCount == 2, "120 target steps to 2");
     }
 
     {
@@ -148,18 +148,9 @@ int main() {
         expect(frac90 > 0.98, "exact 45 Hz at 90 is a full extra every frame");
 
         const auto [mean47, frac47] = meanGen(90, 1000.0 / 47.0, 140);
-        const double extras47 = 90.0 / 47.0 - 1.0;
-        expect(std::abs(mean47 - extras47) < 0.06,
-            "47 Hz game at 90 target averages ~0.915 extras (43 generated, not 47)");
-        expect(frac47 > 0.85 && frac47 < 0.97,
-            "47 Hz game at 90 target skips extras on some frames");
-
-        const auto [mean57, frac57] = meanGen(90, 1000.0 / 57.0, 140);
-        const double extras57 = 90.0 / 57.0 - 1.0;
-        expect(std::abs(mean57 - extras57) < 0.08,
-            "57 Hz game at 90 target averages ~0.58 extras (33 generated, not 57)");
-        expect(frac57 > 0.45 && frac57 < 0.70,
-            "57 Hz game at 90 target generates on about half of real frames");
+        expect(std::abs(mean47 - 1.0) < 0.02,
+            "47 Hz game at 90 target stays at a stable 1 extra (no skip hitch)");
+        expect(frac47 > 0.98, "47 Hz game at 90 target does not dither skips");
 
         const auto [mean60, frac60] = meanGen(60, 22.222, 90);
         expect(std::abs(mean60 - 1.0 / 3.0) < 0.12,
@@ -174,35 +165,22 @@ int main() {
         AdaptivePacer pacer;
         pacer.markFrame(t0);
         auto t = t0;
+        int ingestSkips = 0;
         int extras = 0;
-        int counted = 0;
         for (int i = 0; i < 40; ++i) {
             t += 16ms;
             const auto s = step(pacer, 90, t);
             pacer.markFrame(t);
             if (i < 8)
                 continue;
-            ++counted;
             if (s.genCount > 0)
                 ++extras;
-            expect(!s.ingest, "skips do not request ingest");
+            if (s.ingest)
+                ++ingestSkips;
+            expect(!(s.ingest && s.genCount > 0), "ingest is skip-only");
         }
-        expect(extras > 5 && extras < counted,
-            "62 Hz game at 90 dithers extras (not sticky 0 or 1)");
-    }
-
-    {
-        using lsfgvk::layer::DisplaySlotPacer;
-        DisplaySlotPacer slots;
-        expect(slots.wait(1000.0) == 0.0, "first display slot does not sleep");
-        const auto t0 = DisplaySlotPacer::Clock::now();
-        const double slept = slots.wait(1000.0);
-        const double elapsed = std::chrono::duration<double>(
-            DisplaySlotPacer::Clock::now() - t0).count();
-        expect(slept > 0.0002 && slept < 0.008, "second 1000 Hz slot sleeps ~1 ms");
-        expect(elapsed > 0.0002 && elapsed < 0.008, "second slot wait is about one millisecond");
-        slots.reset();
-        expect(slots.wait(90.0) == 0.0, "reset starts a new slot grid");
+        expect(ingestSkips > 5 && extras > 5,
+            "62 Hz game at 90 dithers extras and ingests the skips");
     }
 
     if (failures != 0) {

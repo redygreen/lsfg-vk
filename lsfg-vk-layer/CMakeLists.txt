@@ -33,4 +33,3 @@ install(FILES "${CMAKE_CURRENT_BINARY_DIR}/VkLayer_LSFGVK_frame_generation.json"
 
 add_executable(lsfg-vk-adaptive-test src/adaptive_test.cpp)
 target_include_directories(lsfg-vk-adaptive-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
-target_link_libraries(lsfg-vk-adaptive-test PRIVATE Threads::Threads)
