@@ -1,21 +1,33 @@
 """
 Constants for the lsfg-vk Adaptive Decky plugin.
 
-Paths are isolated from the official 1.x decky-lsfg-vk plugin so both can
-be installed at once: different layer filenames, config dir, and wrapper.
+The Vulkan layer is installed into a plugin-private tree, matching
+eugeniosegala/decky-lsfg-vk-experimental. That keeps it off the default
+implicit-layer search path so official decky-lsfg-vk cannot load
+alongside this fork. The launch wrapper sets VK_IMPLICIT_LAYER_PATH to
+the private manifest directory for games that use ~/lsfg-vk-adaptive.
 """
 
 from pathlib import Path
 
-LOCAL_LIB = ".local/lib"
-LOCAL_SHARE_BASE = ".local/share"
-VULKAN_LAYER_DIR = ".local/share/vulkan/implicit_layer.d"
+# Private install root. Do not use ~/.local/share/vulkan/implicit_layer.d:
+# that is the global implicit-layer path shared with official lsfg-vk.
+ADAPTIVE_ROOT = ".local/share/decky-lsfg-vk-adaptive"
+LOCAL_LIB = f"{ADAPTIVE_ROOT}/lib"
+VULKAN_LAYER_DIR = f"{ADAPTIVE_ROOT}/vulkan/implicit_layer.d"
 CONFIG_DIR = ".config/lsfg-vk-adaptive"
 
 SCRIPT_NAME = "lsfg-vk-adaptive"
 CONFIG_FILENAME = "conf.toml"
 LIB_FILENAME = "liblsfg-vk-layer.so"
 JSON_FILENAME = "VkLayer_LSFGVK_frame_generation.json"
+# Manifest lives at <root>/vulkan/implicit_layer.d, library at <root>/lib.
+LAYER_LIBRARY_RELATIVE_PATH = f"../../lib/{LIB_FILENAME}"
+
+# Earlier Adaptive installs dropped files into the global implicit-layer
+# path. Remove them on install/uninstall so they cannot keep loading.
+LEGACY_LIB = f".local/lib/{LIB_FILENAME}"
+LEGACY_JSON = f".local/share/vulkan/implicit_layer.d/{JSON_FILENAME}"
 ZIP_FILENAME = "lsfg-vk_noui.zip"
 ARM_LIB_FILENAME = "liblsfg-vk-arm64.so"
 

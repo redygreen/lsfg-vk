@@ -37,7 +37,7 @@ class Plugin:
         self.flatpak_service = FlatpakService()
 
     async def install_lsfg_vk(self) -> Dict[str, Any]:
-        """Install lsfg-vk by extracting the zip file to ~/.local
+        """Install the Adaptive layer into this plugin's private storage.
         
         Returns:
             InstallationResponse dict with success status and message/error
@@ -258,7 +258,11 @@ class Plugin:
         return {
             "launch_option": "~/lsfg-vk-adaptive %command%",
             "instructions": "Add this to your game's launch options in Steam Properties",
-            "explanation": "The lsfg-vk-adaptive script is created during installation and points this fork's v2 layer at ~/.config/lsfg-vk-adaptive/conf.toml"
+            "explanation": (
+                "The lsfg-vk-adaptive script is created during installation. "
+                "It sets VK_IMPLICIT_LAYER_PATH to this plugin's private layer "
+                "and LSFGVK_CONFIG to ~/.config/lsfg-vk-adaptive/conf.toml"
+            )
         }
 
     async def get_config_file_content(self) -> Dict[str, Any]:

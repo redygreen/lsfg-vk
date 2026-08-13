@@ -15,7 +15,8 @@ from typing import Dict, Any
 from .base_service import BaseService
 from .constants import (
     LIB_FILENAME, JSON_FILENAME, ZIP_FILENAME, BIN_DIR,
-    SO_EXT, JSON_EXT, ARMADA_DEVICE_ENV
+    SO_EXT, JSON_EXT, ARMADA_DEVICE_ENV,
+    LAYER_LIBRARY_RELATIVE_PATH, LEGACY_LIB, LEGACY_JSON,
 )
 from .config_schema import ConfigurationManager
 from .types import InstallationResponse, UninstallationResponse, InstallationCheckResponse
@@ -30,9 +31,26 @@ class InstallationService(BaseService):
         self.lib_file = self.local_lib_dir / LIB_FILENAME
         self.json_file = self.local_share_dir / JSON_FILENAME
     
+    def _legacy_global_layer_files(self) -> list:
+        """Files from earlier Adaptive installs that sat on the global Vulkan path."""
+        return [
+            self.user_home / LEGACY_LIB,
+            self.user_home / LEGACY_JSON,
+        ]
+
+    def _remove_legacy_global_layer_files(self) -> list:
+        """Remove leftover Adaptive files from ~/.local/share/vulkan, not official 1.x."""
+        removed = []
+        for file_path in self._legacy_global_layer_files():
+            if file_path in (self.lib_file, self.json_file):
+                continue
+            if self._remove_if_exists(file_path):
+                removed.append(str(file_path))
+        return removed
+
     def install(self) -> InstallationResponse:
-        """Install lsfg-vk by extracting the zip file to ~/.local
-        
+        """Install the Adaptive layer into this plugin's private storage.
+
         Returns:
             InstallationResponse with success status and message/error
         """
@@ -59,6 +77,13 @@ class InstallationService(BaseService):
             self._create_config_file()
             
             self._create_lsfg_launch_script()
+
+            removed_legacy = self._remove_legacy_global_layer_files()
+            if removed_legacy:
+                self.log.info(
+                    "Removed leftover Adaptive files from the global Vulkan path: %s",
+                    removed_legacy,
+                )
             
             self.log.info("lsfg-vk installed successfully")
             return self._success_response(InstallationResponse, "lsfg-vk installed successfully")
@@ -161,15 +186,13 @@ class InstallationService(BaseService):
             with open(src_file, 'r') as f:
                 json_data = json.load(f)
             
-            # Point the implicit layer JSON at ~/.local/lib/liblsfg-vk-layer.so
+            # Manifest is at <root>/vulkan/implicit_layer.d, library at <root>/lib.
             if 'layer' in json_data and 'library_path' in json_data['layer']:
                 current_path = json_data['layer']['library_path']
-                basename = Path(str(current_path)).name
-                if basename == LIB_FILENAME:
-                    json_data['layer']['library_path'] = f"../../../lib/{LIB_FILENAME}"
-                    self.log.info(
-                        f"Fixed library_path from '{current_path}' to '../../../lib/{LIB_FILENAME}'"
-                    )
+                json_data['layer']['library_path'] = LAYER_LIBRARY_RELATIVE_PATH
+                self.log.info(
+                    f"Fixed library_path from '{current_path}' to '{LAYER_LIBRARY_RELATIVE_PATH}'"
+                )
             
             # Write the modified JSON file
             with open(dst_file, 'w') as f:
@@ -233,21 +256,20 @@ class InstallationService(BaseService):
             self.log.debug(f"Could not log DLL path: {e}")
     
     def _create_lsfg_launch_script(self) -> None:
-        """Create the ~/lsfg-vk-adaptive launch script for easier game setup"""
-        # Use the default configuration for the initial script
-        from .config_schema import ConfigurationManager
-        default_config = ConfigurationManager.get_defaults()
-        
-        # Create configuration service to generate the script
+        """Create the ~/lsfg-vk-adaptive launch script from the just-written config."""
         from .configuration import ConfigurationService
         config_service = ConfigurationService(logger=self.log)
         config_service.user_home = self.user_home
+        config_service.local_lib_dir = self.local_lib_dir
+        config_service.local_share_dir = self.local_share_dir
+        config_service.config_dir = self.config_dir
+        config_service.config_file_path = self.config_file_path
         config_service.lsfg_script_path = self.lsfg_launch_script_path
+        config_service.lsfg_launch_script_path = self.lsfg_launch_script_path
+
+        profile_data = config_service._get_profile_data()
+        script_content = config_service._generate_script_content_for_profile(profile_data)
         
-        # Generate script content with default configuration
-        script_content = config_service._generate_script_content(default_config)
-        
-        # Write the script file
         self._write_file(self.lsfg_launch_script_path, script_content, 0o755)
         self.log.info(f"Created lsfg-vk-adaptive launch script at {self.lsfg_launch_script_path}")
     
@@ -314,9 +336,10 @@ class InstallationService(BaseService):
                 if self._remove_if_exists(file_path):
                     removed_files.append(str(file_path))
             
-            # Also try to remove the old script file if it exists (for backward compatibility)
             if self._remove_if_exists(self.lsfg_script_path):
                 removed_files.append(str(self.lsfg_script_path))
+
+            removed_files.extend(self._remove_legacy_global_layer_files())
             
             # Don't remove config directory since we're preserving the config file
             
@@ -350,10 +373,18 @@ class InstallationService(BaseService):
             self.log.info(f"  Old script file: {self.lsfg_script_path}")
             
             removed_files = []
-            # Remove core lsfg-vk files, but preserve config file to maintain user's custom profiles
-            files_to_remove = [self.lib_file, self.json_file, self.lsfg_launch_script_path, self.lsfg_script_path]
-            
+            files_to_remove = [
+                self.lib_file,
+                self.json_file,
+                self.lsfg_launch_script_path,
+                self.lsfg_script_path,
+                *self._legacy_global_layer_files(),
+            ]
+            seen = set()
             for file_path in files_to_remove:
+                if file_path in seen:
+                    continue
+                seen.add(file_path)
                 try:
                     if self._remove_if_exists(file_path):
                         removed_files.append(str(file_path))

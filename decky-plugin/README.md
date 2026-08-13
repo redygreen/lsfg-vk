@@ -6,15 +6,18 @@ It is **not** a drop-in replacement for the official plugin. Paths, layer filena
 
 | | Official Decky LSFG-VK | This plugin |
 |---|---|---|
-| Layer | `liblsfg-vk.so` / `VkLayer_LS_frame_generation.json` | `liblsfg-vk-layer.so` / `VkLayer_LSFGVK_frame_generation.json` |
+| Layer files | `~/.local/lib/liblsfg-vk.so` / `~/.local/share/vulkan/implicit_layer.d/VkLayer_LS_frame_generation.json` | `~/.local/share/decky-lsfg-vk-adaptive/` (private tree, not on the default Vulkan search path) |
 | Config | `~/.config/lsfg-vk/conf.toml` (v1 `[[game]]`) | `~/.config/lsfg-vk-adaptive/conf.toml` (v2 `[[profile]]`) |
 | Launch option | `~/lsfg %command%` | `~/lsfg-vk-adaptive %command%` |
 
+This matches how [decky-lsfg-vk-experimental](https://github.com/eugeniosegala/decky-lsfg-vk-experimental) avoids clashing with the official plugin: the layer is not installed into `~/.local/share/vulkan/implicit_layer.d`. The wrapper sets `VK_IMPLICIT_LAYER_PATH` so only this fork's layer is visible to the game, plus `DISABLE_LSFG=1` so official 1.x stays off if a nested loader still finds it.
+
 ## What it does
 
-- Installs this fork's v2 Vulkan layer into `~/.local` without overwriting the 1.x files.
+- Installs this fork's v2 Vulkan layer into `~/.local/share/decky-lsfg-vk-adaptive` without touching official 1.x files.
+- On Install, also removes leftover Adaptive files from the global Vulkan path (`~/.local/lib/liblsfg-vk-layer.so` and `~/.local/share/vulkan/implicit_layer.d/VkLayer_LSFGVK_frame_generation.json`) if an earlier zip put them there.
 - Writes Adaptive-aware v2 TOML (`adaptive`, `target_fps`, `allow_fp16`, `multiplier` as a ceiling).
-- Creates `~/lsfg-vk-adaptive`, which sets `LSFGVK_CONFIG` and `LSFGVK_PROFILE` so the current plugin profile is used without matching `active_in`.
+- Creates `~/lsfg-vk-adaptive`, which sets `VK_IMPLICIT_LAYER_PATH`, `LSFGVK_CONFIG`, and `LSFGVK_PROFILE`.
 - Keeps the original Deck workarounds (WSI off by default, WOW64, vkBasalt, Zink, DXVK cap).
 
 HDR mode and experimental present-mode toggles from the 1.x plugin are omitted: v2 infers HDR from the swapchain format.
@@ -43,7 +46,7 @@ To rebuild the zip after changing the plugin or layer:
 5. Add `~/lsfg-vk-adaptive %command%` to the game's Steam launch options.
 6. Restart the game after switching Adaptive on or off.
 
-Do **not** also add `~/lsfg %command%` on the same game. The Adaptive wrapper sets `DISABLE_LSFG=1` so the official 1.x layer is ignored even if that plugin is still installed. After updating the plugin zip, open LSFG Adaptive and click Install again (or toggle any setting) so `~/lsfg-vk-adaptive` is rewritten.
+Do **not** also add `~/lsfg %command%` on the same game. After updating the plugin zip, open LSFG Adaptive and click **Install** again so the layer is moved into the private tree and `~/lsfg-vk-adaptive` is rewritten.
 
 If a game black-screens and exits: turn **Adaptive** off, keep Max Multiplier at 2×, and restart the game. Adaptive on Gamescope is still experimental.
 
