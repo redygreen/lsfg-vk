@@ -86,6 +86,8 @@ export interface AdaptiveStatsResult {
   generated_fps: number;
   displayed_fps: number;
   avg_gen: number;
+  ingest_fps: number;
+  fg_fps: number;
   target_fps: number;
   adaptive: boolean;
   error?: string;

@@ -6,8 +6,9 @@
 
 namespace lsfgvk::layer {
 
-    /// Accumulate one real present and `genCount` generated frames.
+    /// Accumulate one real present, `genCount` generated frames, and whether
+    /// this skip ran optical-flow ingest.
     /// Flushes a one-second snapshot to $LSFGVK_STATS (or next to $LSFGVK_CONFIG).
-    void recordFrameStats(size_t genCount, float targetFps, bool adaptive);
+    void recordFrameStats(size_t genCount, bool ingest, float targetFps, bool adaptive);
 
 }

@@ -24,8 +24,14 @@ namespace lsfgvk::layer {
 
     /// How many interpolated frames to insert before this real present.
     ///
-    /// extras = target * interval − 1, dithered with a remainder so 16 ms at
-    /// 90 Hz averages 0.44 extras (not stuck at 0). multiplier is a ceiling.
+    /// extras = target * interval − 1. Values within 0.15 of an integer snap
+    /// to that integer so 47 Hz at 90 stays at a stable 1 extra (x2 cadence)
+    /// instead of skipping ~9% of extras (FIFO hitch). Mid-range values still
+    /// dither with a remainder. multiplier is a ceiling.
+    ///
+    /// `ingest` is set only on a dithered skip that will generate soon, so
+    /// LSFG temporal state stays warm without running optical-flow at native
+    /// rate while already at the target.
     ///
     /// Interval is present-to-present of the game's QueuePresent calls.
     /// A long acquire wait plus already-fast GPU work means the game is
@@ -37,6 +43,8 @@ namespace lsfgvk::layer {
 
         struct Sample {
             size_t genCount{0};
+            bool ingest{false};
+            double extrasWant{0.0};
             double gameDt{0.0};
             double workDt{0.0};
             double waitDt{0.0};
@@ -105,6 +113,17 @@ namespace lsfgvk::layer {
 
             const double extrasWant = std::clamp(
                 target * *this->emaDt - 1.0, 0.0, static_cast<double>(maxGen));
+            out.extrasWant = extrasWant;
+
+            constexpr double kSnap = 0.15;
+            const double nearest = std::round(extrasWant);
+            if (std::abs(extrasWant - nearest) <= kSnap) {
+                out.genCount = static_cast<size_t>(nearest);
+                this->acc = 0.0;
+                out.acc = 0.0;
+                return out;
+            }
+
             this->acc += extrasWant;
             int extra = static_cast<int>(std::floor(this->acc));
             extra = std::clamp(extra, 0, static_cast<int>(maxGen));
@@ -112,6 +131,7 @@ namespace lsfgvk::layer {
             this->acc = std::clamp(this->acc, 0.0, 0.999);
             out.genCount = static_cast<size_t>(extra);
             out.acc = this->acc;
+            out.ingest = extra == 0;
             return out;
         }
 

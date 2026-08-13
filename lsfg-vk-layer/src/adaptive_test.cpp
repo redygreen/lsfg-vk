@@ -63,11 +63,12 @@ int main() {
         pacer.markFrame(t0);
 
         auto s = step(pacer, 90, t0 + 22ms);
-        expect(s.genCount == 0, "first 22 ms at 90 banks a 0.98 extra");
+        expect(s.genCount == 1, "first 22 ms at 90 snaps to a stable extra");
+        expect(!s.ingest, "stable extra does not ingest");
         pacer.markFrame(t0 + 22ms);
 
         s = step(pacer, 90, t0 + 44ms);
-        expect(s.genCount == 1, "remainder then inserts the extra");
+        expect(s.genCount == 1, "45 Hz at 90 stays at 1 extra");
     }
 
     {
@@ -80,7 +81,9 @@ int main() {
     {
         AdaptivePacer pacer;
         pacer.markFrame(t0);
-        expect(step(pacer, 90, t0 + 11ms).genCount == 0, "already at target, no extras");
+        auto atTarget = step(pacer, 90, t0 + 11ms);
+        expect(atTarget.genCount == 0, "already at target, no extras");
+        expect(!atTarget.ingest, "already at target, no ingest");
     }
 
     {
@@ -145,11 +148,9 @@ int main() {
         expect(frac90 > 0.98, "exact 45 Hz at 90 is a full extra every frame");
 
         const auto [mean47, frac47] = meanGen(90, 1000.0 / 47.0, 140);
-        const double extras47 = 90.0 / 47.0 - 1.0;
-        expect(std::abs(mean47 - extras47) < 0.06,
-            "47 Hz game at 90 target averages ~0.915 extras (43 generated, not 47)");
-        expect(frac47 > 0.85 && frac47 < 0.97,
-            "47 Hz game at 90 target skips extras on some frames");
+        expect(std::abs(mean47 - 1.0) < 0.02,
+            "47 Hz game at 90 target stays at a stable 1 extra (no skip hitch)");
+        expect(frac47 > 0.98, "47 Hz game at 90 target does not dither skips");
 
         const auto [mean60, frac60] = meanGen(60, 22.222, 90);
         expect(std::abs(mean60 - 1.0 / 3.0) < 0.12,
@@ -158,6 +159,28 @@ int main() {
         const auto [mean70, frac70] = meanGen(70, 22.222, 90);
         expect(std::abs(mean70 - (70.0 / 45.0 - 1.0)) < 0.12,
             "45 Hz game at 70 target averages ~0.56 extras");
+    }
+
+    {
+        AdaptivePacer pacer;
+        pacer.markFrame(t0);
+        auto t = t0;
+        int ingestSkips = 0;
+        int extras = 0;
+        for (int i = 0; i < 40; ++i) {
+            t += 16ms;
+            const auto s = step(pacer, 90, t);
+            pacer.markFrame(t);
+            if (i < 8)
+                continue;
+            if (s.genCount > 0)
+                ++extras;
+            if (s.ingest)
+                ++ingestSkips;
+            expect(!(s.ingest && s.genCount > 0), "ingest is skip-only");
+        }
+        expect(ingestSkips > 5 && extras > 5,
+            "62 Hz game at 90 dithers extras and ingests the skips");
     }
 
     if (failures != 0) {

@@ -57,7 +57,7 @@ export function AdaptiveStats() {
           setStats(next);
       } catch {
         if (!cancelled)
-          setStats({ success: false, stale: true, real_fps: 0, generated_fps: 0, displayed_fps: 0, avg_gen: 0, target_fps: 0, adaptive: false });
+          setStats({ success: false, stale: true, real_fps: 0, generated_fps: 0, displayed_fps: 0, avg_gen: 0, ingest_fps: 0, fg_fps: 0, target_fps: 0, adaptive: false });
       }
     };
 
@@ -110,6 +110,11 @@ export function AdaptiveStats() {
             <StatRow
               label={t("STATS_DISPLAYED", "On screen")}
               value={fmt(stats?.displayed_fps ?? 0)}
+              dim={stale}
+            />
+            <StatRow
+              label={t("STATS_FLOW", "FG work")}
+              value={fmt(stats?.fg_fps ?? 0)}
               dim={stale}
             />
             <div

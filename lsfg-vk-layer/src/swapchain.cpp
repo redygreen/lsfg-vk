@@ -151,6 +151,8 @@ size_t Swapchain::chooseGeneratedCount(AdaptivePacer::Clock::time_point now) {
     this->lastWaitDt = sample.waitDt;
     this->lastEmaDt = sample.emaDt;
     this->lastAcc = sample.acc;
+    this->lastIngest = sample.ingest;
+    this->lastExtrasWant = sample.extrasWant;
     return sample.genCount;
 }
 
@@ -202,6 +204,8 @@ VkResult Swapchain::present(const vk::Vulkan& vk,
             + " wait_ms=" + std::to_string(this->lastWaitDt * 1000.0)
             + " ema_ms=" + std::to_string(this->lastEmaDt * 1000.0)
             + " acc=" + std::to_string(this->lastAcc)
+            + " extrasWant=" + std::to_string(this->lastExtrasWant)
+            + " ingest=" + std::string(this->lastIngest ? "1" : "0")
             + " enabled=" + std::string(this->profile.enabled ? "1" : "0")
             + " waits=" + std::to_string(semaphores.size()));
     }
@@ -222,42 +226,34 @@ VkResult Swapchain::present(const vk::Vulkan& vk,
             result = presentGeneratedFrames(vk, queue, swapchain, next_chain, imageIdx,
                 genCount, true);
         } else {
-            // Adaptive extras use the Fixed present path (copy waits on the
-            // game's render semaphores) so interpolation sees consecutive
-            // finished frames. Skip copies also wait those semaphores, then
+            // Skip copies wait the game's render semaphores, then
             // QueuePresent waits copy-done only — binary semaphores cannot
             // be waited by both the blit and the original present.
             //
-            // Skip still runs LSFG optical-flow ingest so the next generate
-            // interpolates the latest pair, not a stale temporal buffer.
+            // Optical-flow ingest runs only on dithered skips (a generate
+            // is coming). Skips at/above target are copy-only so Adaptive
+            // does not run LSFG at native rate.
             waitFence(vk, *this->copyFence, this->copyFenceInFlight);
             waitFence(vk, *this->renderFence, this->renderFenceInFlight);
 
-            if (this->fidx == 0) {
+            if (this->fidx == 0 || genCount == 0) {
                 forceFifo(next_chain);
+                const bool ingest = this->fidx != 0 && this->lastIngest;
+                if (ingest)
+                    this->instance.get().scheduleIngest(this->ctx.get());
+                else
+                    this->instance.get().scheduleFrames(this->ctx.get(), 0);
                 const VkSemaphore copyDone =
                     this->copyDoneSemaphores.at(this->fidx % 2).handle();
-                copyToSource(vk, swapchainImage, semaphores, false, copyDone,
-                    this->copyFence->handle());
-                this->copyFenceInFlight = true;
-                this->instance.get().scheduleFrames(this->ctx.get(), 0);
-                result = queuePresentOriginal(vk, queue, swapchain, next_chain, imageIdx,
-                    semaphores, originalInfo, copyDone, true);
-                if (this->logPresentsRemaining > 0)
-                    layerLog("lsfg-vk: adaptive first present ok res="
-                        + std::to_string(static_cast<int>(result)));
-            } else if (genCount == 0) {
-                forceFifo(next_chain);
-                this->instance.get().scheduleIngest(this->ctx.get());
-                const VkSemaphore copyDone =
-                    this->copyDoneSemaphores.at(this->fidx % 2).handle();
-                copyToSource(vk, swapchainImage, semaphores, true, copyDone,
+                copyToSource(vk, swapchainImage, semaphores, ingest, copyDone,
                     this->copyFence->handle());
                 this->copyFenceInFlight = true;
                 result = queuePresentOriginal(vk, queue, swapchain, next_chain, imageIdx,
                     semaphores, originalInfo, copyDone, true);
                 if (this->logPresentsRemaining > 0)
-                    layerLog("lsfg-vk: adaptive ingest skip present ok res="
+                    layerLog(std::string(ingest
+                            ? "lsfg-vk: adaptive ingest skip present ok res="
+                            : "lsfg-vk: adaptive cheap skip present ok res=")
                         + std::to_string(static_cast<int>(result)));
             } else {
                 this->instance.get().scheduleFrames(this->ctx.get(), genCount);
@@ -276,7 +272,9 @@ VkResult Swapchain::present(const vk::Vulkan& vk,
 
     this->pacer.markFrame(now);
     this->fidx++;
-    recordFrameStats(genCount, this->profile.target_fps, this->profile.adaptive);
+    recordFrameStats(genCount,
+        this->profile.adaptive && this->lastIngest && genCount == 0,
+        this->profile.target_fps, this->profile.adaptive);
     if (this->logPresentsRemaining > 0)
         this->logPresentsRemaining--;
     return result;

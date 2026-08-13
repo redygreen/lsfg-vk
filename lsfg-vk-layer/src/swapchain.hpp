@@ -123,7 +123,9 @@ namespace lsfgvk::layer {
         double lastWaitDt{0.0};
         double lastEmaDt{0.0};
         double lastAcc{0.0};
+        double lastExtrasWant{0.0};
         size_t logPresentsRemaining{16};
+        bool lastIngest{false};
         bool renderFenceInFlight{false};
         bool copyFenceInFlight{false};
     };
