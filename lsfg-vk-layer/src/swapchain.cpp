@@ -240,21 +240,23 @@ VkResult Swapchain::presentGenerated(const vk::Vulkan& vk,
 
     cmdbuf.end(vk);
 
-    // No extra frames: copy into the FG source ring, then present the real image
-    // on this same (game) thread. Steam Deck WSI is not safe from a second thread.
+    // No extra frames: copy into the FG source ring, then present the real
+    // image with a semaphore wait. Do not CPU-wait a fence and present with
+    // zero wait semaphores — that also used to call submit() with an empty
+    // signal list, which crashed on vector::back().
     if (genCount == 0) {
-        this->copyFence->reset(vk);
+        auto& pcs = this->postCopySemaphores.at(
+            this->idx % this->postCopySemaphores.size());
         cmdbuf.submit(vk,
             semaphores, VK_NULL_HANDLE, 0,
-            {}, VK_NULL_HANDLE, 0,
-            this->copyFence->handle()
+            { pcs.first.handle() }, VK_NULL_HANDLE, 0
         );
-        if (!this->copyFence->wait(vk, 2ULL * 1000 * 1000 * 1000))
-            throw ls::vulkan_error(VK_TIMEOUT, "vkWaitForFences() failed");
 
         const VkPresentInfoKHR presentInfo{
             .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
             .pNext = next_chain,
+            .waitSemaphoreCount = 1,
+            .pWaitSemaphores = &pcs.first.handle(),
             .swapchainCount = 1,
             .pSwapchains = &swapchain,
             .pImageIndices = &imageIdx,
@@ -263,6 +265,8 @@ VkResult Swapchain::presentGenerated(const vk::Vulkan& vk,
         if (res != VK_SUCCESS && res != VK_SUBOPTIMAL_KHR)
             throw ls::vulkan_error(res, "vkQueuePresentKHR() failed");
 
+        layerLog("lsfg-vk: adaptive passthrough present ok");
+        this->idx++;
         this->fidx++;
         return res;
     }
