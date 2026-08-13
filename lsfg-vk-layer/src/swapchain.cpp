@@ -229,31 +229,23 @@ VkResult Swapchain::present(const vk::Vulkan& vk,
             // Skip copies wait the game's render semaphores, then
             // QueuePresent waits copy-done only — binary semaphores cannot
             // be waited by both the blit and the original present.
-            //
-            // Optical-flow ingest runs only on dithered skips (a generate
-            // is coming). Skips at/above target are copy-only so Adaptive
-            // does not run LSFG at native rate.
+            // Skips never run LSFG: mixing 0/1 extras with ingest was the
+            // 57 real / 57 FG-work path that cost ~2× a 2× generator.
             waitFence(vk, *this->copyFence, this->copyFenceInFlight);
             waitFence(vk, *this->renderFence, this->renderFenceInFlight);
 
             if (this->fidx == 0 || genCount == 0) {
                 forceFifo(next_chain);
-                const bool ingest = this->fidx != 0 && this->lastIngest;
-                if (ingest)
-                    this->instance.get().scheduleIngest(this->ctx.get());
-                else
-                    this->instance.get().scheduleFrames(this->ctx.get(), 0);
+                this->instance.get().scheduleFrames(this->ctx.get(), 0);
                 const VkSemaphore copyDone =
                     this->copyDoneSemaphores.at(this->fidx % 2).handle();
-                copyToSource(vk, swapchainImage, semaphores, ingest, copyDone,
+                copyToSource(vk, swapchainImage, semaphores, false, copyDone,
                     this->copyFence->handle());
                 this->copyFenceInFlight = true;
                 result = queuePresentOriginal(vk, queue, swapchain, next_chain, imageIdx,
                     semaphores, originalInfo, copyDone, true);
                 if (this->logPresentsRemaining > 0)
-                    layerLog(std::string(ingest
-                            ? "lsfg-vk: adaptive ingest skip present ok res="
-                            : "lsfg-vk: adaptive cheap skip present ok res=")
+                    layerLog("lsfg-vk: adaptive cheap skip present ok res="
                         + std::to_string(static_cast<int>(result)));
             } else {
                 this->instance.get().scheduleFrames(this->ctx.get(), genCount);

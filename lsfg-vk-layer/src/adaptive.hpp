@@ -24,14 +24,13 @@ namespace lsfgvk::layer {
 
     /// How many interpolated frames to insert before this real present.
     ///
-    /// extras = target * interval − 1. Values within 0.15 of an integer snap
-    /// to that integer so 47 Hz at 90 stays at a stable 1 extra (x2 cadence)
-    /// instead of skipping ~9% of extras (FIFO hitch). Mid-range values still
-    /// dither with a remainder. multiplier is a ceiling.
-    ///
-    /// `ingest` is set only on a dithered skip that will generate soon, so
-    /// LSFG temporal state stays warm without running optical-flow at native
-    /// rate while already at the target.
+    /// extrasWant = target * interval − 1. Mixing 0 and 1 extras keeps the
+    /// game at a high real FPS while still running LSFG every present, which
+    /// costs about 2× a fixed 2× generator. So:
+    ///   extrasWant < 0.5  → 0 extras (native)
+    ///   extrasWant ≤ 1.15 → 1 extra (same cadence/GPU as 2×)
+    ///   above that        → dither between 1 and maxGen, never 0
+    /// multiplier is a ceiling.
     ///
     /// Interval is present-to-present of the game's QueuePresent calls.
     /// A long acquire wait plus already-fast GPU work means the game is
@@ -115,23 +114,28 @@ namespace lsfgvk::layer {
                 target * *this->emaDt - 1.0, 0.0, static_cast<double>(maxGen));
             out.extrasWant = extrasWant;
 
-            constexpr double kSnap = 0.15;
-            const double nearest = std::round(extrasWant);
-            if (std::abs(extrasWant - nearest) <= kSnap) {
-                out.genCount = static_cast<size_t>(nearest);
+            // Do not dither 0 vs 1: that is the 57 real + 33 gen path, where
+            // the game stays fast and LSFG still runs every real frame.
+            if (extrasWant < 0.5) {
                 this->acc = 0.0;
                 out.acc = 0.0;
+                out.genCount = 0;
+                return out;
+            }
+            if (extrasWant <= 1.15 || maxGen == 1) {
+                this->acc = 0.0;
+                out.acc = 0.0;
+                out.genCount = 1;
                 return out;
             }
 
             this->acc += extrasWant;
             int extra = static_cast<int>(std::floor(this->acc));
-            extra = std::clamp(extra, 0, static_cast<int>(maxGen));
+            extra = std::clamp(extra, 1, static_cast<int>(maxGen));
             this->acc -= static_cast<double>(extra);
             this->acc = std::clamp(this->acc, 0.0, 0.999);
             out.genCount = static_cast<size_t>(extra);
             out.acc = this->acc;
-            out.ingest = extra == 0;
             return out;
         }
 

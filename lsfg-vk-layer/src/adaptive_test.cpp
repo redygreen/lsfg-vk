@@ -132,7 +132,7 @@ int main() {
         expect(step(pacer, 90, t).genCount == 1, "exact 45 Hz settles at 1 extra");
         pacer.markFrame(t);
         t += duration_cast<Clock::duration>(duration<double>(1.0 / 45.0));
-        (void)step(pacer, 120, t);
+        expect(step(pacer, 120, t).genCount == 1, "120 target starts at 1 extra");
         pacer.markFrame(t);
         t += duration_cast<Clock::duration>(duration<double>(1.0 / 45.0));
         expect(step(pacer, 120, t).genCount == 2, "120 target steps to 2");
@@ -153,19 +153,26 @@ int main() {
         expect(frac47 > 0.98, "47 Hz game at 90 target does not dither skips");
 
         const auto [mean60, frac60] = meanGen(60, 22.222, 90);
-        expect(std::abs(mean60 - 1.0 / 3.0) < 0.12,
-            "45 Hz game at 60 target averages ~0.33 extras");
+        expect(mean60 < 0.05 && frac60 < 0.05,
+            "45 Hz game at 60 target stays native (0.33 extras would mix 0/1)");
 
         const auto [mean70, frac70] = meanGen(70, 22.222, 90);
-        expect(std::abs(mean70 - (70.0 / 45.0 - 1.0)) < 0.12,
-            "45 Hz game at 70 target averages ~0.56 extras");
+        expect(mean70 > 0.98 && frac70 > 0.98,
+            "45 Hz game at 70 target uses a stable 1 extra");
+
+        const auto [mean57, frac57] = meanGen(90, 1000.0 / 57.0, 140);
+        expect(mean57 > 0.98 && frac57 > 0.98,
+            "57 Hz game at 90 target uses a stable 1 extra (not 57/33 split)");
+
+        const auto [mean70n, frac70n] = meanGen(90, 1000.0 / 70.0, 90);
+        expect(mean70n < 0.05 && frac70n < 0.05,
+            "70 Hz game at 90 target stays native");
     }
 
     {
         AdaptivePacer pacer;
         pacer.markFrame(t0);
         auto t = t0;
-        int ingestSkips = 0;
         int extras = 0;
         for (int i = 0; i < 40; ++i) {
             t += 16ms;
@@ -175,12 +182,9 @@ int main() {
                 continue;
             if (s.genCount > 0)
                 ++extras;
-            if (s.ingest)
-                ++ingestSkips;
-            expect(!(s.ingest && s.genCount > 0), "ingest is skip-only");
+            expect(!s.ingest, "pacer never requests ingest");
         }
-        expect(ingestSkips > 5 && extras > 5,
-            "62 Hz game at 90 dithers extras and ingests the skips");
+        expect(extras == 0, "62 Hz game at 90 does not run FG");
     }
 
     if (failures != 0) {
