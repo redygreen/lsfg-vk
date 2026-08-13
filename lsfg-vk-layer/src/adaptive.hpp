@@ -91,7 +91,8 @@ namespace lsfgvk::layer {
 
             // This present already met the target. Do not train EMA on it —
             // a burst of 3–5 ms returns would collapse extras to 0 forever.
-            if (gameDt * target <= 1.0) {
+            // Ignore gameDt == 0 (same-timestamp probes / clock ties).
+            if (gameDt > 1e-6 && gameDt * target <= 1.0) {
                 this->lastGenCount = 0;
                 out.genCount = 0;
                 out.acc = this->acc;
