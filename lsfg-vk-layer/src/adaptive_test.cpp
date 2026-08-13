@@ -74,8 +74,8 @@ int main() {
     {
         AdaptivePacer pacer;
         pacer.markFrame(t0);
-        expect(step(pacer, 90, t0 + 22ms, 0.011).genCount == 0,
-            "22 ms interval with 11 ms acquire wait is not a 45 Hz game");
+        expect(step(pacer, 90, t0 + 22ms, 0.011).genCount == 1,
+            "45 Hz with 11 ms FIFO wait still wants x2");
     }
 
     {
@@ -84,6 +84,11 @@ int main() {
         auto atTarget = step(pacer, 90, t0 + 11ms);
         expect(atTarget.genCount == 0, "already at target, no extras");
         expect(!atTarget.ingest, "already at target, no ingest");
+
+        AdaptivePacer vsync90;
+        vsync90.markFrame(t0);
+        expect(step(vsync90, 90, t0 + 11ms, 0.010).genCount == 0,
+            "11 ms interval with vsync wait is already at 90");
     }
 
     {
@@ -140,8 +145,8 @@ int main() {
 
     {
         const auto [meanFifo, fracFifo] = meanGen(90, 22.222, 90, 0.011);
-        expect(meanFifo < 0.05 && fracFifo < 0.05,
-            "FIFO-bound 22 ms interval with 11 ms wait does not generate");
+        expect(meanFifo > 0.9 && fracFifo > 0.98,
+            "45 Hz with 11 ms FIFO wait stays at x2");
 
         const auto [mean90, frac90] = meanGen(90, 22.222, 90);
         expect(mean90 > 0.9 && mean90 < 1.1, "45 Hz game at 90 target averages ~1 extra");

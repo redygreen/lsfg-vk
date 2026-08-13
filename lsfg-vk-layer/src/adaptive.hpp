@@ -24,16 +24,16 @@ namespace lsfgvk::layer {
 
     /// How many interpolated frames to insert before this real present.
     ///
-    /// extrasWant = target × interval − 1, then locked to a stable integer
-    /// (0 / 1 / 2 / …) with hysteresis. Mixing 0 and 1 extras keeps Gamescope
-    /// FPS even while motion judders; x2 smoothness needs extra-real-extra-real.
-    /// FIFO then paces the game toward target / (1 + extras). multiplier is a
-    /// ceiling. `ingest` is unused while the lock is integer (no dithered skips).
+    /// Original LS Adaptive presents from its own capture window at the
+    /// panel rate with fractional timestamps. This layer only runs inside
+    /// the game's QueuePresent, so smoothness like Fixed x2 needs a stable
+    /// integer extra count (extra-real-extra-real). extrasWant =
+    /// target × interval − 1, then locked to 0/1/2/… with hysteresis.
     ///
-    /// Interval is present-to-present of the game's QueuePresent calls.
-    /// A long acquire wait plus already-fast GPU work means the game is
-    /// vsync-bound at the target: insert nothing (otherwise 2× locks it at
-    /// half refresh). GPU-bound frames (wait ≈ 0, long interval) generate.
+    /// FIFO wait from our own extras is not "already at target": 45 Hz
+    /// with an 11 ms acquire wait still wants x2. Only a present interval
+    /// that is already at the target (dt × target ≈ 1) drops extras.
+    /// multiplier is a ceiling.
     class AdaptivePacer {
     public:
         using Clock = std::chrono::steady_clock;
@@ -80,9 +80,10 @@ namespace lsfgvk::layer {
                 return out;
             }
 
-            // Vsync-bound at (or above) target: extra presents would lock
-            // the game at refresh / (1 + extras).
-            if (out.waitDt > 0.003 && workDt * target <= 1.05) {
+            // Already presenting at the target (vsync-bound at 90, etc.).
+            // Do not use workDt: extra FIFO presents add ~1/target acquire
+            // wait at 45 Hz, and treating that as "at target" turns x2 off.
+            if (out.waitDt > 0.003 && dt * target <= 1.08) {
                 this->acc *= 0.35;
                 this->locked.reset();
                 out.acc = this->acc;

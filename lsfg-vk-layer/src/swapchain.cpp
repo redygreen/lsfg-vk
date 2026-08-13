@@ -218,51 +218,40 @@ VkResult Swapchain::present(const vk::Vulkan& vk,
             this->instance.get().scheduleFrames(this->ctx.get(), 0);
             result = queuePresentOriginal(vk, queue, swapchain, next_chain, imageIdx,
                 semaphores, originalInfo);
-        } else if (!this->profile.adaptive) {
+        } else if (!this->profile.adaptive || genCount > 0) {
+            // Adaptive x2/x3 uses the same present path as Fixed: one extra
+            // then the real frame, FIFO-paced. Mixing skip/generate is what
+            // kills x2 smoothness even when Gamescope FPS looks even.
             this->instance.get().scheduleFrames(this->ctx.get(), genCount);
             forceFifo(next_chain);
+            waitFence(vk, *this->copyFence, this->copyFenceInFlight);
             waitFence(vk, *this->renderFence, this->renderFenceInFlight);
             copyToSource(vk, swapchainImage, semaphores, true, VK_NULL_HANDLE, VK_NULL_HANDLE);
             result = presentGeneratedFrames(vk, queue, swapchain, next_chain, imageIdx,
                 genCount, true);
         } else {
-            // Skip copies wait the game's render semaphores, then
-            // QueuePresent waits copy-done only — binary semaphores cannot
-            // be waited by both the blit and the original present.
-            //
-            // Optical-flow ingest runs only if the pacer asks for it
-            // (dithered skip before a generate). Integer-locked x2/x3
-            // generates every real frame and does not ingest.
+            // Adaptive skip (first frame, already at target, hitch).
+            // Binary semaphores cannot be waited by both the blit and present.
             waitFence(vk, *this->copyFence, this->copyFenceInFlight);
             waitFence(vk, *this->renderFence, this->renderFenceInFlight);
-
-            if (this->fidx == 0 || genCount == 0) {
-                forceFifo(next_chain);
-                const bool ingest = this->fidx != 0 && this->lastIngest;
-                if (ingest)
-                    this->instance.get().scheduleIngest(this->ctx.get());
-                else
-                    this->instance.get().scheduleFrames(this->ctx.get(), 0);
-                const VkSemaphore copyDone =
-                    this->copyDoneSemaphores.at(this->fidx % 2).handle();
-                copyToSource(vk, swapchainImage, semaphores, ingest, copyDone,
-                    this->copyFence->handle());
-                this->copyFenceInFlight = true;
-                result = queuePresentOriginal(vk, queue, swapchain, next_chain, imageIdx,
-                    semaphores, originalInfo, copyDone, true);
-                if (this->logPresentsRemaining > 0)
-                    layerLog(std::string(ingest
-                            ? "lsfg-vk: adaptive ingest skip present ok res="
-                            : "lsfg-vk: adaptive cheap skip present ok res=")
-                        + std::to_string(static_cast<int>(result)));
-            } else {
-                this->instance.get().scheduleFrames(this->ctx.get(), genCount);
-                forceFifo(next_chain);
-                copyToSource(vk, swapchainImage, semaphores, true, VK_NULL_HANDLE,
-                    VK_NULL_HANDLE);
-                result = presentGeneratedFrames(vk, queue, swapchain, next_chain, imageIdx,
-                    genCount, true);
-            }
+            forceFifo(next_chain);
+            const bool ingest = this->fidx != 0 && this->lastIngest;
+            if (ingest)
+                this->instance.get().scheduleIngest(this->ctx.get());
+            else
+                this->instance.get().scheduleFrames(this->ctx.get(), 0);
+            const VkSemaphore copyDone =
+                this->copyDoneSemaphores.at(this->fidx % 2).handle();
+            copyToSource(vk, swapchainImage, semaphores, ingest, copyDone,
+                this->copyFence->handle());
+            this->copyFenceInFlight = true;
+            result = queuePresentOriginal(vk, queue, swapchain, next_chain, imageIdx,
+                semaphores, originalInfo, copyDone, true);
+            if (this->logPresentsRemaining > 0)
+                layerLog(std::string(ingest
+                        ? "lsfg-vk: adaptive ingest skip present ok res="
+                        : "lsfg-vk: adaptive cheap skip present ok res=")
+                    + std::to_string(static_cast<int>(result)));
         }
     } catch (...) {
         this->pacer.markFrame(now);
