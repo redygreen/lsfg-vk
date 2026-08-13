@@ -116,6 +116,8 @@ Swapchain::Swapchain(const vk::Vulkan& vk, backend::Instance& backend,
     this->renderCommandBuffer.emplace(vk);
     this->renderFence.emplace(vk);
     this->copyFence.emplace(vk);
+    this->copyDoneSemaphores.emplace_back(vk);
+    this->copyDoneSemaphores.emplace_back(vk);
     for (size_t i = 0; i < this->destinationImages.size(); i++) {
         this->passes.emplace_back(RenderPass {
             .commandBuffer = vk::CommandBuffer(vk),
@@ -216,37 +218,41 @@ VkResult Swapchain::present(const vk::Vulkan& vk,
             this->instance.get().scheduleFrames(this->ctx.get(), genCount);
             forceFifo(next_chain);
             waitFence(vk, *this->renderFence, this->renderFenceInFlight);
-            copyToSource(vk, swapchainImage, semaphores, true, VK_NULL_HANDLE);
+            copyToSource(vk, swapchainImage, semaphores, true, VK_NULL_HANDLE, VK_NULL_HANDLE);
             result = presentGeneratedFrames(vk, queue, swapchain, next_chain, imageIdx,
                 genCount, true);
         } else {
-            // Adaptive: never consume the game's present wait semaphores.
-            // Copy into the source ring so extras always interpolate consecutive
-            // real frames, then QueuePresent the real frame as the app asked.
+            // Adaptive: never consume the game's present wait semaphores and
+            // never CPU-wait the source copy in this present (that flushed
+            // the GPU and collapsed intervals to 3 ms, extras to 0, and
+            // real FPS from ~70 to ~47). Present waits on the original
+            // semaphores plus copy-done.
             waitFence(vk, *this->copyFence, this->copyFenceInFlight);
             waitFence(vk, *this->renderFence, this->renderFenceInFlight);
+            const VkSemaphore copyDone =
+                this->copyDoneSemaphores.at(this->fidx % 2).handle();
 
             if (genCount == 0 || this->fidx == 0) {
-                copyToSource(vk, swapchainImage, {}, false, this->copyFence->handle());
+                copyToSource(vk, swapchainImage, {}, false, copyDone,
+                    this->copyFence->handle());
                 this->copyFenceInFlight = true;
-                waitFence(vk, *this->copyFence, this->copyFenceInFlight);
                 this->instance.get().scheduleFrames(this->ctx.get(), 0);
                 result = queuePresentOriginal(vk, queue, swapchain, next_chain, imageIdx,
-                    semaphores, originalInfo);
+                    semaphores, originalInfo, copyDone);
                 if (this->logPresentsRemaining > 0)
                     layerLog("lsfg-vk: adaptive skip present ok res="
                         + std::to_string(static_cast<int>(result)));
             } else {
                 this->instance.get().scheduleFrames(this->ctx.get(), genCount);
                 forceFifo(next_chain);
-                copyToSource(vk, swapchainImage, {}, true, this->copyFence->handle());
+                copyToSource(vk, swapchainImage, {}, true, copyDone,
+                    this->copyFence->handle());
                 this->copyFenceInFlight = true;
                 result = presentGeneratedFrames(vk, queue, swapchain, next_chain, imageIdx,
                     genCount, false);
-                waitFence(vk, *this->copyFence, this->copyFenceInFlight);
                 if (result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR) {
                     result = queuePresentOriginal(vk, queue, swapchain, next_chain, imageIdx,
-                        semaphores, originalInfo);
+                        semaphores, originalInfo, copyDone);
                 }
             }
         }
@@ -267,16 +273,28 @@ VkResult Swapchain::present(const vk::Vulkan& vk,
 VkResult Swapchain::queuePresentOriginal(const vk::Vulkan& vk, VkQueue queue,
         VkSwapchainKHR swapchain, void* next_chain, uint32_t imageIdx,
         const std::vector<VkSemaphore>& semaphores,
-        const VkPresentInfoKHR* originalInfo) {
+        const VkPresentInfoKHR* originalInfo,
+        VkSemaphore extraWait) {
+    std::vector<VkSemaphore> waits = semaphores;
+    if (originalInfo && originalInfo->pWaitSemaphores && originalInfo->waitSemaphoreCount) {
+        waits.assign(originalInfo->pWaitSemaphores,
+            originalInfo->pWaitSemaphores + originalInfo->waitSemaphoreCount);
+    }
+    if (extraWait)
+        waits.push_back(extraWait);
+
     VkResult res = VK_SUCCESS;
     if (originalInfo && originalInfo->swapchainCount == 1) {
-        res = vk.df().QueuePresentKHR(queue, originalInfo);
+        VkPresentInfoKHR info = *originalInfo;
+        info.waitSemaphoreCount = static_cast<uint32_t>(waits.size());
+        info.pWaitSemaphores = waits.empty() ? nullptr : waits.data();
+        res = vk.df().QueuePresentKHR(queue, &info);
     } else {
         const VkPresentInfoKHR presentInfo{
             .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
             .pNext = next_chain,
-            .waitSemaphoreCount = static_cast<uint32_t>(semaphores.size()),
-            .pWaitSemaphores = semaphores.empty() ? nullptr : semaphores.data(),
+            .waitSemaphoreCount = static_cast<uint32_t>(waits.size()),
+            .pWaitSemaphores = waits.empty() ? nullptr : waits.data(),
             .swapchainCount = 1,
             .pSwapchains = &swapchain,
             .pImageIndices = &imageIdx,
@@ -299,7 +317,7 @@ void Swapchain::waitFence(const vk::Vulkan& vk, const vk::Fence& fence, bool& in
 
 void Swapchain::copyToSource(const vk::Vulkan& vk, VkImage swapchainImage,
         const std::vector<VkSemaphore>& waitSemaphores, bool signalSync,
-        VkFence fence) {
+        VkSemaphore copyDone, VkFence fence) {
     const auto& sourceImage = this->sourceImages.at(this->fidx % 2);
     const auto& cmdbuf = *this->renderCommandBuffer;
     cmdbuf.begin(vk);
@@ -330,9 +348,12 @@ void Swapchain::copyToSource(const vk::Vulkan& vk, VkImage swapchainImage,
         }
     );
     cmdbuf.end(vk);
+    std::vector<VkSemaphore> signals;
+    if (copyDone)
+        signals.push_back(copyDone);
     cmdbuf.submit(vk,
         waitSemaphores, VK_NULL_HANDLE, 0,
-        {},
+        signals,
         signalSync ? this->syncSemaphore->handle() : VK_NULL_HANDLE,
         signalSync ? this->idx++ : 0,
         fence);

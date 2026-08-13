@@ -81,11 +81,12 @@ namespace lsfgvk::layer {
         VkResult queuePresentOriginal(const vk::Vulkan& vk, VkQueue queue,
             VkSwapchainKHR swapchain, void* next_chain, uint32_t imageIdx,
             const std::vector<VkSemaphore>& semaphores,
-            const VkPresentInfoKHR* originalInfo);
+            const VkPresentInfoKHR* originalInfo,
+            VkSemaphore extraWait = VK_NULL_HANDLE);
         void waitFence(const vk::Vulkan& vk, const vk::Fence& fence, bool& inFlight);
         void copyToSource(const vk::Vulkan& vk, VkImage swapchainImage,
             const std::vector<VkSemaphore>& waitSemaphores, bool signalSync,
-            VkFence fence);
+            VkSemaphore copyDone, VkFence fence);
         VkResult presentGeneratedFrames(const vk::Vulkan& vk, VkQueue queue,
             VkSwapchainKHR swapchain, void* next_chain, uint32_t imageIdx,
             size_t genCount, bool presentRealWithInternalSemaphores);
@@ -98,6 +99,7 @@ namespace lsfgvk::layer {
         ls::lazy<vk::CommandBuffer> renderCommandBuffer;
         ls::lazy<vk::Fence> renderFence;
         ls::lazy<vk::Fence> copyFence;
+        std::vector<vk::Semaphore> copyDoneSemaphores;
         struct RenderPass {
             vk::CommandBuffer commandBuffer;
             vk::Semaphore acquireSemaphore;
