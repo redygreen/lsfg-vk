@@ -29,3 +29,6 @@ install(TARGETS lsfg-vk-layer
     LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}")
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/VkLayer_LSFGVK_frame_generation.json"
     DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/vulkan/implicit_layer.d")
+
+add_executable(lsfg-vk-adaptive-test src/adaptive_test.cpp)
+target_include_directories(lsfg-vk-adaptive-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")

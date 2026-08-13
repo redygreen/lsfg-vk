@@ -32,6 +32,10 @@ namespace lsfgvk::layer {
         /// @return true if the configuration was updated
         bool update();
 
+        /// Push target_fps / adaptive into existing swapchains when possible.
+        /// @return true if applied in place (no swapchain-context rebuild)
+        [[nodiscard]] bool applyRuntimeProfileIfPossible();
+
         /// modify instance create info
         /// @param createInfo original create info
         /// @param finish function to call after modification

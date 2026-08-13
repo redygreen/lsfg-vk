@@ -366,17 +366,17 @@ namespace {
 
         if (reload) {
             try {
-                for (const auto& [swapchain, vk] : instance_info->swapchains) {
-                    auto& info = instance_info->swapchainInfos.at(swapchain);
+                if (!layer_info->root.applyRuntimeProfileIfPossible()) {
+                    for (const auto& [swapchain, vk] : instance_info->swapchains) {
+                        auto& info = instance_info->swapchainInfos.at(swapchain);
 
-                    layer_info->root.removeSwapchainContext(swapchain);
-                    layer_info->root.createSwapchainContext(vk, swapchain, info);
+                        layer_info->root.removeSwapchainContext(swapchain);
+                        layer_info->root.createSwapchainContext(vk, swapchain, info);
+                    }
+                    layerLog("lsfg-vk: rebuilt swapchain context after config change");
                 }
-
-                std::cerr << "lsfg-vk: updated lsfg-vk configuration\n";
             } catch (const std::exception& e) {
-                std::cerr << "lsfg-vk: something went wrong during lsfg-vk configuration update:\n";
-                std::cerr << "- " << e.what() << '\n';
+                layerLog(std::string("lsfg-vk: config update failed: ") + e.what());
             }
         }
 
@@ -495,7 +495,7 @@ namespace {
 __attribute__((visibility("default")))
 VkResult vkNegotiateLoaderLayerInterfaceVersion(VkNegotiateLayerInterface* pVersionStruct) {
     layerLog("lsfg-vk: vkNegotiate begin");
-    layerLog("lsfg-vk: adaptive build=orig-present-v3");
+    layerLog("lsfg-vk: adaptive build=game-dt-v4");
 
     // ensure loader compatibility
     if (!pVersionStruct

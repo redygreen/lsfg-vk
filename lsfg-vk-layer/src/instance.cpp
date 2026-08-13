@@ -68,6 +68,19 @@ bool Root::update() {
     return true;
 }
 
+bool Root::applyRuntimeProfileIfPossible() {
+    if (!this->active_profile.has_value())
+        return false;
+
+    for (const auto& mapping : this->swapchains) {
+        if (!mapping.second->runtimeProfileCompatible(*this->active_profile))
+            return false;
+    }
+    for (auto& mapping : this->swapchains)
+        (void)mapping.second->tryApplyRuntimeProfile(*this->active_profile);
+    return true;
+}
+
 void Root::modifyInstanceCreateInfo(VkInstanceCreateInfo& createInfo,
         const std::function<void(void)>& finish) const {
     if (!this->active_profile.has_value())

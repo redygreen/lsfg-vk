@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include "adaptive.hpp"
 #include "lsfg-vk-backend/lsfgvk.hpp"
 #include "lsfg-vk-common/configuration/config.hpp"
 #include "lsfg-vk-common/helpers/pointers.hpp"
@@ -12,10 +13,8 @@
 #include "lsfg-vk-common/vulkan/timeline_semaphore.hpp"
 #include "lsfg-vk-common/vulkan/vulkan.hpp"
 
-#include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <optional>
 #include <utility>
 #include <vector>
 
@@ -72,9 +71,14 @@ namespace lsfgvk::layer {
             const std::vector<VkSemaphore>& semaphores,
             const VkPresentInfoKHR* originalInfo = nullptr);
 
+        /// Apply target_fps / adaptive without rebuilding FG images.
+        /// @return false if multiplier or backend settings changed
+        [[nodiscard]] bool tryApplyRuntimeProfile(const ls::GameConf& next);
+        [[nodiscard]] bool runtimeProfileCompatible(const ls::GameConf& next) const;
+
     private:
         /// Choose how many generated frames to insert for Adaptive.
-        /// Uses the real-frame interval vs target_fps; multiplier is a ceiling.
+        /// Uses game time outside present() vs target_fps; multiplier is a ceiling.
         [[nodiscard]] size_t chooseGeneratedCount();
         VkResult presentGenerated(const vk::Vulkan& vk,
             VkQueue queue, VkSwapchainKHR swapchain,
@@ -106,8 +110,10 @@ namespace lsfgvk::layer {
         ls::GameConf profile;
         SwapchainInfo info;
 
-        std::optional<std::chrono::steady_clock::time_point> lastPresentTime;
-        double adaptiveError{0.0};
+        AdaptivePacer pacer;
+        double lastGameDt{0.0};
+        double lastEmaDt{0.0};
+        size_t logPresentsRemaining{16};
         bool renderFenceInFlight{false};
     };
 

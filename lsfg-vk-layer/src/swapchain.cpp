@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "swapchain.hpp"
+#include "adaptive.hpp"
 #include "log.hpp"
 #include "lsfg-vk-backend/lsfgvk.hpp"
 #include "lsfg-vk-common/configuration/config.hpp"
@@ -12,8 +13,6 @@
 #include "lsfg-vk-common/vulkan/vulkan.hpp"
 
 #include <algorithm>
-#include <chrono>
-#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -25,7 +24,6 @@
 
 using namespace lsfgvk;
 using namespace lsfgvk::layer;
-using SteadyClock = std::chrono::steady_clock;
 
 namespace {
     VkImageMemoryBarrier barrierHelper(VkImage handle,
@@ -139,37 +137,38 @@ Swapchain::Swapchain(const vk::Vulkan& vk, backend::Instance& backend,
 }
 
 size_t Swapchain::chooseGeneratedCount() {
-    const size_t maxGen = this->destinationImages.size();
-    const double targetFps = std::max(1.0, static_cast<double>(this->profile.target_fps));
-    const auto now = SteadyClock::now();
+    const auto sample = this->pacer.choose(
+        static_cast<double>(this->profile.target_fps),
+        this->destinationImages.size(),
+        AdaptivePacer::Clock::now());
+    this->lastGameDt = sample.gameDt;
+    this->lastEmaDt = sample.emaDt;
+    return sample.genCount;
+}
 
-    if (!this->lastPresentTime.has_value()) {
-        this->lastPresentTime = now;
-        this->adaptiveError = 0.0;
-        return 0;
+bool Swapchain::runtimeProfileCompatible(const ls::GameConf& next) const {
+    return next.multiplier == this->profile.multiplier
+        && next.flow_scale == this->profile.flow_scale
+        && next.performance_mode == this->profile.performance_mode
+        && next.pacing == this->profile.pacing
+        && next.gpu == this->profile.gpu;
+}
+
+bool Swapchain::tryApplyRuntimeProfile(const ls::GameConf& next) {
+    if (!runtimeProfileCompatible(next))
+        return false;
+
+    const bool changed = next.adaptive != this->profile.adaptive
+        || next.target_fps != this->profile.target_fps;
+    this->profile = next;
+    if (changed) {
+        layerLog("lsfg-vk: adaptive runtime update target_fps="
+            + std::to_string(this->profile.target_fps)
+            + " adaptive=" + std::string(this->profile.adaptive ? "1" : "0")
+            + " ceiling=" + std::to_string(this->profile.multiplier));
+        this->logPresentsRemaining = 8;
     }
-
-    const double elapsed = std::chrono::duration<double>(now - *this->lastPresentTime).count();
-    this->lastPresentTime = now;
-
-    // Ignore hitches and implausibly fast presents; passthrough the real frame.
-    if (elapsed < 0.0005 || elapsed > 0.100) {
-        this->adaptiveError = 0.0;
-        return 0;
-    }
-
-    double desired = targetFps * elapsed - 1.0 + this->adaptiveError;
-    if (desired < 0.0)
-        desired = 0.0;
-
-    auto gen = static_cast<size_t>(std::llround(desired));
-    if (gen > maxGen)
-        gen = maxGen;
-
-    this->adaptiveError = desired - static_cast<double>(gen);
-    if (gen == maxGen && this->adaptiveError > 0.0)
-        this->adaptiveError = 0.0;
-    return gen;
+    return true;
 }
 
 VkResult Swapchain::present(const vk::Vulkan& vk,
@@ -180,13 +179,20 @@ VkResult Swapchain::present(const vk::Vulkan& vk,
     const size_t genCount = this->profile.adaptive
         ? chooseGeneratedCount()
         : this->destinationImages.size();
-    if (this->profile.adaptive && this->fidx < 8) {
+    const bool logThis = this->profile.adaptive
+        && (this->logPresentsRemaining > 0 || this->fidx % 60 == 0);
+    if (logThis) {
         layerLog("lsfg-vk: adaptive present fidx=" + std::to_string(this->fidx)
             + " genCount=" + std::to_string(genCount)
+            + " game_ms=" + std::to_string(this->lastGameDt * 1000.0)
+            + " ema_ms=" + std::to_string(this->lastEmaDt * 1000.0)
             + " waits=" + std::to_string(semaphores.size()));
     }
-    return presentGenerated(vk, queue, swapchain, next_chain, imageIdx, semaphores,
+    const auto result = presentGenerated(vk, queue, swapchain, next_chain, imageIdx, semaphores,
         genCount, originalInfo);
+    if (this->logPresentsRemaining > 0)
+        this->logPresentsRemaining--;
+    return result;
 }
 
 VkResult Swapchain::presentGenerated(const vk::Vulkan& vk,
@@ -225,9 +231,10 @@ VkResult Swapchain::presentGenerated(const vk::Vulkan& vk,
         }
         if (res != VK_SUCCESS && res != VK_SUBOPTIMAL_KHR)
             throw ls::vulkan_error(res, "vkQueuePresentKHR() failed");
-        if (this->fidx < 8)
+        if (this->logPresentsRemaining > 0)
             layerLog("lsfg-vk: adaptive passthrough present ok res="
                 + std::to_string(static_cast<int>(res)));
+        this->pacer.markPresentReturned(AdaptivePacer::Clock::now());
         this->fidx++;
         return res;
     }
@@ -290,7 +297,7 @@ VkResult Swapchain::presentGenerated(const vk::Vulkan& vk,
         auto& pass = this->passes.at(i);
 
         uint32_t aqImageIdx{};
-        if (this->fidx < 8)
+        if (this->logPresentsRemaining > 0)
             layerLog("lsfg-vk: adaptive acquire generated i=" + std::to_string(i));
         auto res = vk.df().AcquireNextImageKHR(vk.dev(), swapchain,
             UINT64_MAX, pass.acquireSemaphore.handle(),
@@ -382,6 +389,7 @@ VkResult Swapchain::presentGenerated(const vk::Vulkan& vk,
     if (res != VK_SUCCESS && res != VK_SUBOPTIMAL_KHR)
         throw ls::vulkan_error(res, "vkQueuePresentKHR() failed");
 
+    this->pacer.markPresentReturned(AdaptivePacer::Clock::now());
     this->fidx++;
     return res;
 }
