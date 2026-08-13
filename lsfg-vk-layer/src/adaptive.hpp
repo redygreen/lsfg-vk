@@ -24,13 +24,10 @@ namespace lsfgvk::layer {
 
     /// How many interpolated frames to insert before this real present.
     ///
-    /// extrasWant = target * interval − 1. Mixing 0 and 1 extras keeps the
-    /// game at a high real FPS while still running LSFG every present, which
-    /// costs about 2× a fixed 2× generator. So:
-    ///   extrasWant < 0.5  → 0 extras (native)
-    ///   extrasWant ≤ 1.15 → 1 extra (same cadence/GPU as 2×)
-    ///   above that        → dither between 1 and maxGen, never 0
-    /// multiplier is a ceiling.
+    /// extras = target * interval − 1, dithered with a remainder so 57 Hz
+    /// at 90 averages ~0.58 extras (33 generated), not a sticky 2×. multiplier
+    /// is a ceiling. Skips do not run LSFG: FG work should track generated
+    /// frames, not real FPS.
     ///
     /// Interval is present-to-present of the game's QueuePresent calls.
     /// A long acquire wait plus already-fast GPU work means the game is
@@ -114,24 +111,9 @@ namespace lsfgvk::layer {
                 target * *this->emaDt - 1.0, 0.0, static_cast<double>(maxGen));
             out.extrasWant = extrasWant;
 
-            // Do not dither 0 vs 1: that is the 57 real + 33 gen path, where
-            // the game stays fast and LSFG still runs every real frame.
-            if (extrasWant < 0.5) {
-                this->acc = 0.0;
-                out.acc = 0.0;
-                out.genCount = 0;
-                return out;
-            }
-            if (extrasWant <= 1.15 || maxGen == 1) {
-                this->acc = 0.0;
-                out.acc = 0.0;
-                out.genCount = 1;
-                return out;
-            }
-
             this->acc += extrasWant;
             int extra = static_cast<int>(std::floor(this->acc));
-            extra = std::clamp(extra, 1, static_cast<int>(maxGen));
+            extra = std::clamp(extra, 0, static_cast<int>(maxGen));
             this->acc -= static_cast<double>(extra);
             this->acc = std::clamp(this->acc, 0.0, 0.999);
             out.genCount = static_cast<size_t>(extra);

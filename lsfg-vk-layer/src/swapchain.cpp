@@ -229,8 +229,8 @@ VkResult Swapchain::present(const vk::Vulkan& vk,
             // Skip copies wait the game's render semaphores, then
             // QueuePresent waits copy-done only — binary semaphores cannot
             // be waited by both the blit and the original present.
-            // Skips never run LSFG: mixing 0/1 extras with ingest was the
-            // 57 real / 57 FG-work path that cost ~2× a 2× generator.
+            // Skips never run LSFG, so FG work tracks generated frames
+            // (57 real + 33 generated → fg_fps ≈ 33, not 57).
             waitFence(vk, *this->copyFence, this->copyFenceInFlight);
             waitFence(vk, *this->renderFence, this->renderFenceInFlight);
 
