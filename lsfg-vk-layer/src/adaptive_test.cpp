@@ -98,6 +98,25 @@ int main() {
         AdaptivePacer pacer;
         pacer.markPresentReturned(t0);
         auto t = t0;
+        for (int i = 0; i < 6; ++i) {
+            t += 22ms;
+            step(pacer, 90, t);
+            pacer.markPresentReturned(t);
+        }
+        const double emaBefore = pacer.choose(90, 3, t).emaDt;
+        t += 4ms;
+        auto s = step(pacer, 90, t);
+        expect(s.genCount == 0, "4 ms burst does not generate");
+        expect(std::abs(s.emaDt - emaBefore) < 0.0001, "4 ms burst does not poison EMA");
+        pacer.markPresentReturned(t);
+        t += 22ms;
+        expect(step(pacer, 90, t).genCount == 1, "FG resumes after 4 ms burst");
+    }
+
+    {
+        AdaptivePacer pacer;
+        pacer.markPresentReturned(t0);
+        auto t = t0;
         for (int i = 0; i < 4; ++i) {
             t += 22ms;
             step(pacer, 90, t);

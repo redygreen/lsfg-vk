@@ -218,10 +218,11 @@ VkResult Swapchain::presentGenerated(const vk::Vulkan& vk,
     const auto& swapchainImage = this->info.images.at(imageIdx);
     const auto& sourceImage = this->sourceImages.at(this->fidx % 2);
 
-    // Off / first frame: present exactly as the application asked. Replacing
-    // wait semaphores without a copy deadlocked the next acquire on Deck.
-    // When Adaptive is on and we skip extras, still copy into the source ring
-    // so the next generated frame interpolates consecutive game frames.
+    // Off / skip extras: present exactly as the application asked.
+    // Replacing wait semaphores without a copy deadlocked the next acquire
+    // on Deck. Copying into the source ring and presenting with the blit
+    // semaphore returned immediately, collapsed intervals to 3–5 ms, and
+    // Adaptive treated the game as already above target.
     if (genCount == 0) {
         try {
             this->instance.get().scheduleFrames(this->ctx.get(), 0);
@@ -229,95 +230,29 @@ VkResult Swapchain::presentGenerated(const vk::Vulkan& vk,
             throw ls::error("failed to schedule frames", e);
         }
 
-        const bool copySource = this->profile.enabled && this->fidx > 0
-            && !this->postCopySemaphores.empty();
-        if (!copySource) {
-            VkResult res = VK_SUCCESS;
-            if (originalInfo && originalInfo->swapchainCount == 1) {
-                res = vk.df().QueuePresentKHR(queue, originalInfo);
-            } else {
-                const VkPresentInfoKHR presentInfo{
-                    .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
-                    .pNext = next_chain,
-                    .waitSemaphoreCount = static_cast<uint32_t>(semaphores.size()),
-                    .pWaitSemaphores = semaphores.empty() ? nullptr : semaphores.data(),
-                    .swapchainCount = 1,
-                    .pSwapchains = &swapchain,
-                    .pImageIndices = &imageIdx,
-                };
-                res = vk.df().QueuePresentKHR(queue, &presentInfo);
-            }
-            if (res != VK_SUCCESS && res != VK_SUBOPTIMAL_KHR)
-                throw ls::vulkan_error(res, "vkQueuePresentKHR() failed");
-            if (this->logPresentsRemaining > 0)
-                layerLog("lsfg-vk: adaptive passthrough present ok res="
-                    + std::to_string(static_cast<int>(res)));
-            this->pacer.markPresentReturned(AdaptivePacer::Clock::now());
-            this->fidx++;
-            return res;
+        // True passthrough: the application's QueuePresent. A blit that
+        // replaces wait semaphores returned immediately on Deck, the next
+        // interval collapsed to 3–5 ms, and Adaptive treated the game as
+        // already above target (0 generated for the rest of the session).
+        VkResult res = VK_SUCCESS;
+        if (originalInfo && originalInfo->swapchainCount == 1) {
+            res = vk.df().QueuePresentKHR(queue, originalInfo);
+        } else {
+            const VkPresentInfoKHR presentInfo{
+                .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+                .pNext = next_chain,
+                .waitSemaphoreCount = static_cast<uint32_t>(semaphores.size()),
+                .pWaitSemaphores = semaphores.empty() ? nullptr : semaphores.data(),
+                .swapchainCount = 1,
+                .pSwapchains = &swapchain,
+                .pImageIndices = &imageIdx,
+            };
+            res = vk.df().QueuePresentKHR(queue, &presentInfo);
         }
-
-        if (this->renderFenceInFlight) {
-            if (!this->renderFence->wait(vk, 150ULL * 1000 * 1000))
-                throw ls::vulkan_error(VK_TIMEOUT, "vkWaitForFences() failed");
-            this->renderFence->reset(vk);
-            this->renderFenceInFlight = false;
-        }
-
-        const auto& cmdbuf = *this->renderCommandBuffer;
-        cmdbuf.begin(vk);
-        cmdbuf.blitImage(vk,
-            {
-                barrierHelper(swapchainImage,
-                    VK_ACCESS_NONE,
-                    VK_ACCESS_TRANSFER_READ_BIT,
-                    VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-                    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL
-                ),
-                barrierHelper(sourceImage.handle(),
-                    VK_ACCESS_NONE,
-                    VK_ACCESS_TRANSFER_WRITE_BIT,
-                    VK_IMAGE_LAYOUT_UNDEFINED,
-                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL
-                ),
-            },
-            { swapchainImage, sourceImage.handle() },
-            sourceImage.getExtent(),
-            {
-                barrierHelper(swapchainImage,
-                    VK_ACCESS_TRANSFER_READ_BIT,
-                    VK_ACCESS_MEMORY_READ_BIT,
-                    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                    VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
-                ),
-            }
-        );
-        cmdbuf.end(vk);
-
-        auto& pcs = this->postCopySemaphores.at(
-            this->fidx % this->postCopySemaphores.size());
-        cmdbuf.submit(vk,
-            semaphores, VK_NULL_HANDLE, 0,
-            { pcs.first.handle() }, VK_NULL_HANDLE, 0,
-            this->renderFence->handle()
-        );
-        this->renderFenceInFlight = true;
-
-        const VkPresentInfoKHR presentInfo{
-            .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
-            .pNext = originalInfo ? originalInfo->pNext : next_chain,
-            .waitSemaphoreCount = 1,
-            .pWaitSemaphores = &pcs.first.handle(),
-            .swapchainCount = 1,
-            .pSwapchains = &swapchain,
-            .pImageIndices = &imageIdx,
-            .pResults = originalInfo ? originalInfo->pResults : nullptr,
-        };
-        auto res = vk.df().QueuePresentKHR(queue, &presentInfo);
         if (res != VK_SUCCESS && res != VK_SUBOPTIMAL_KHR)
             throw ls::vulkan_error(res, "vkQueuePresentKHR() failed");
         if (this->logPresentsRemaining > 0)
-            layerLog("lsfg-vk: adaptive source-copy present ok res="
+            layerLog("lsfg-vk: adaptive passthrough present ok res="
                 + std::to_string(static_cast<int>(res)));
         this->pacer.markPresentReturned(AdaptivePacer::Clock::now());
         this->fidx++;

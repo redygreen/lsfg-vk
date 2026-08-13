@@ -89,6 +89,15 @@ namespace lsfgvk::layer {
                 return out;
             }
 
+            // This present already met the target. Do not train EMA on it —
+            // a burst of 3–5 ms returns would collapse extras to 0 forever.
+            if (gameDt * target <= 1.0) {
+                this->lastGenCount = 0;
+                out.genCount = 0;
+                out.acc = this->acc;
+                return out;
+            }
+
             if (this->emaDt.has_value()) {
                 const double ema = *this->emaDt;
                 if (gameDt < 0.003 || (gameDt > 0.040 && gameDt > ema * 1.6)) {
