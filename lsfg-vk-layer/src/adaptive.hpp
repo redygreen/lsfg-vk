@@ -145,45 +145,19 @@ namespace lsfgvk::layer {
         double acc{0.0};
     };
 
-    /// Space Adaptive QueuePresent calls onto 1/target_fps slots.
+    /// Sleep one Adaptive display slot (1/target_fps).
     ///
-    /// Original LS Adaptive presents from its own capture window at the
-    /// panel rate, so 30 generated frames occupy 30 distinct vsyncs.
-    /// This layer presents on the game swapchain: extra+real in the same
-    /// millisecond are coalesced by Gamescope (mailbox-like). Waiting one
-    /// slot after each present lets consecutive vsyncs show extra then real.
-    class DisplaySlotPacer {
-    public:
-        using Clock = std::chrono::steady_clock;
-
-        /// Sleep until the next display slot. Returns seconds actually slept.
-        double wait(double targetFps) {
-            const double hz = std::clamp(targetFps, 30.0, 240.0);
-            const auto slot = std::chrono::duration_cast<Clock::duration>(
-                std::chrono::duration<double>(1.0 / hz));
-            const auto now = Clock::now();
-            if (!this->nextAt.has_value()) {
-                this->nextAt = now + slot;
-                return 0.0;
-            }
-            auto target = *this->nextAt;
-            if (now > target + slot * 3 / 2)
-                target = now;
-            double slept = 0.0;
-            if (now < target) {
-                std::this_thread::sleep_until(target);
-                slept = std::chrono::duration<double>(Clock::now() - now).count();
-            }
-            const auto after = Clock::now();
-            const auto base = after > target ? after : target;
-            this->nextAt = base + slot;
-            return slept;
-        }
-
-        void reset() { this->nextAt.reset(); }
-
-    private:
-        std::optional<Clock::time_point> nextAt;
-    };
+    /// Call only after a generated QueuePresent, before the next extra or
+    /// the real frame. Skip presents must not sleep: a global 90 Hz grid
+    /// turned the following game present into a 2–8 ms "burst" that the
+    /// pacer discarded, so extras never caught up to the target.
+    inline double sleepDisplaySlot(double targetFps) {
+        const double hz = std::clamp(targetFps, 30.0, 240.0);
+        const auto slot = std::chrono::duration<double>(1.0 / hz);
+        const auto started = std::chrono::steady_clock::now();
+        std::this_thread::sleep_for(slot);
+        return std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - started).count();
+    }
 
 }

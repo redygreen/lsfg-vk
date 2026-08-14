@@ -119,7 +119,6 @@ namespace lsfgvk::layer {
         SwapchainInfo info;
 
         AdaptivePacer pacer;
-        DisplaySlotPacer slotPacer;
         double lastGameDt{0.0};
         double lastWorkDt{0.0};
         double lastWaitDt{0.0};

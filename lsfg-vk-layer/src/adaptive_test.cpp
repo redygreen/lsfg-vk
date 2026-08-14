@@ -198,17 +198,12 @@ int main() {
     }
 
     {
-        using lsfgvk::layer::DisplaySlotPacer;
-        DisplaySlotPacer slots;
-        expect(slots.wait(1000.0) == 0.0, "first display slot does not sleep");
-        const auto tStart = DisplaySlotPacer::Clock::now();
-        const double slept = slots.wait(1000.0);
-        const double elapsed = std::chrono::duration<double>(
-            DisplaySlotPacer::Clock::now() - tStart).count();
-        expect(slept > 0.0002 && slept < 0.008, "second 1000 Hz slot sleeps ~1 ms");
-        expect(elapsed > 0.0002 && elapsed < 0.008, "second slot wait is about one millisecond");
-        slots.reset();
-        expect(slots.wait(90.0) == 0.0, "reset starts a new slot grid");
+        using lsfgvk::layer::sleepDisplaySlot;
+        const auto tStart = Clock::now();
+        const double slept = sleepDisplaySlot(1000.0);
+        const double elapsed = std::chrono::duration<double>(Clock::now() - tStart).count();
+        expect(slept > 0.0002 && slept < 0.008, "1000 Hz display slot sleeps ~1 ms");
+        expect(elapsed > 0.0002 && elapsed < 0.008, "1000 Hz slot wait is about one millisecond");
     }
 
     if (failures != 0) {
