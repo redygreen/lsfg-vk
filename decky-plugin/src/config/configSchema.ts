@@ -1,0 +1,13 @@
+export {
+  ConfigFieldType,
+  ConfigField,
+  CONFIG_SCHEMA,
+  ConfigurationData,
+  getFieldNames,
+  getDefaults,
+  getFieldTypes,
+  DLL, NO_FP16, MULTIPLIER, ENABLED, ADAPTIVE, TARGET_FPS, FLOW_SCALE, PERFORMANCE_MODE,
+  DXVK_FRAME_RATE, ENABLE_WOW64,
+  DISABLE_STEAMDECK_MODE, MANGOHUD_WORKAROUND, DISABLE_VKBASALT,
+  FORCE_ENABLE_VKBASALT, ENABLE_WSI, ENABLE_ZINK
+} from './generatedConfigSchema';

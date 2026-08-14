@@ -8,8 +8,8 @@
 
 ## Installation
 >[!TIP]
-> If you are on a Steam Deck or similar handheld, consider using the [Decky plugin for lsfg-vk](https://github.com/xXJSONDeruloXx/decky-lsfg-vk). This is an easy way to install and configure lsfg-vk on the Steam Deck.
-> Please keep in mind that it is not officially supported and support questions should be directed to the plugin's repository & discord.
+> If you are on a Steam Deck, download [`Decky-LSFG-VK-Adaptive.zip`](decky-plugin/Decky-LSFG-VK-Adaptive.zip) and install it via Decky Developer Mode. Launch option: `~/lsfg-vk-adaptive %command%`. It does not overwrite the official Decky LSFG-VK plugin.
+> The [official Decky plugin](https://github.com/xXJSONDeruloXx/decky-lsfg-vk) still targets lsfg-vk 1.x and has no Adaptive support.
 
 1. Before proceeding, please make sure you have [Lossless Scaling](https://store.steampowered.com/app/993090/Lossless_Scaling/) downloaded on Steam.
 2. Head to the [GitHub Releases](https://github.com/PancakeTAS/lsfg-vk/releases) and download the file named "lsfg-vk-2.0.0-x86_64.tar.xz".

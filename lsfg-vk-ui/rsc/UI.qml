@@ -188,8 +188,22 @@ ApplicationWindow {
                 }
 
                 GroupEntry {
-                    title: "Multiplier"
-                    description: "Control the amount of generated frames"
+                    title: "Adaptive Frame Generation"
+                    description: "Generate only as many frames as needed to approach the target FPS"
+
+                    CheckBox {
+                        Layout.alignment: Qt.AlignRight
+
+                        checked: backend.adaptive
+                        onToggled: backend.adaptive = checked
+                    }
+                }
+
+                GroupEntry {
+                    title: backend.adaptive ? "Max Multiplier" : "Multiplier"
+                    description: backend.adaptive
+                        ? "Upper limit on generated frames per real frame"
+                        : "Control the amount of generated frames"
 
                     SpinBox {
                         Layout.alignment: Qt.AlignRight
@@ -199,6 +213,22 @@ ApplicationWindow {
 
                         value: backend.multiplier
                         onValueModified: backend.multiplier = value
+                    }
+                }
+
+                GroupEntry {
+                    title: "Target FPS"
+                    description: "Desired displayed framerate for Adaptive mode"
+                    visible: backend.adaptive
+
+                    SpinBox {
+                        Layout.alignment: Qt.AlignRight
+
+                        from: 30
+                        to: 360
+
+                        value: Math.round(backend.target_fps)
+                        onValueModified: backend.target_fps = value
                     }
                 }
 

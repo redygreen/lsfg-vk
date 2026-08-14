@@ -1,12 +1,15 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "instance.hpp"
+#include "log.hpp"
 #include "lsfg-vk-common/helpers/errors.hpp"
 #include "lsfg-vk-common/helpers/pointers.hpp"
 #include "lsfg-vk-common/vulkan/vulkan.hpp"
 #include "swapchain.hpp"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -99,6 +102,7 @@ namespace {
                 };
 
             instance_info->handles.push_back(*instance);
+            layerLog("lsfg-vk: vkCreateInstance succeeded");
 
             return VK_SUCCESS;
         } catch (const ls::vulkan_error& e) {
@@ -326,7 +330,8 @@ namespace {
                 .format = newInfo.imageFormat,
                 .colorSpace = newInfo.imageColorSpace,
                 .extent = newInfo.imageExtent,
-                .presentMode = newInfo.presentMode
+                .presentMode = newInfo.presentMode,
+                .imageUsage = newInfo.imageUsage
             }).first->second;
 
             // create lsfg-vk swapchain
@@ -335,14 +340,13 @@ namespace {
             instance_info->swapchains.emplace(*swapchain,
                 ls::R<vk::Vulkan>(it->second));
 
+            layerLog("lsfg-vk: swapchain context created");
             return res;
         } catch (const ls::vulkan_error& e) {
-            std::cerr << "lsfg-vk: something went wrong during lsfg-vk swapchain creation:\n";
-            std::cerr << "- " << e.what() << '\n';
+            layerLog(std::string("lsfg-vk: swapchain creation failed: ") + e.what());
             return e.error();
         } catch (const std::exception& e) {
-            std::cerr << "lsfg-vk: something went wrong during lsfg-vk swapchain creation:\n";
-            std::cerr << "- " << e.what() << '\n';
+            layerLog(std::string("lsfg-vk: swapchain creation failed: ") + e.what());
             return VK_ERROR_INITIALIZATION_FAILED;
         }
     }
@@ -363,17 +367,17 @@ namespace {
 
         if (reload) {
             try {
-                for (const auto& [swapchain, vk] : instance_info->swapchains) {
-                    auto& info = instance_info->swapchainInfos.at(swapchain);
+                if (!layer_info->root.applyRuntimeProfileIfPossible()) {
+                    for (const auto& [swapchain, vk] : instance_info->swapchains) {
+                        auto& info = instance_info->swapchainInfos.at(swapchain);
 
-                    layer_info->root.removeSwapchainContext(swapchain);
-                    layer_info->root.createSwapchainContext(vk, swapchain, info);
+                        layer_info->root.removeSwapchainContext(swapchain);
+                        layer_info->root.createSwapchainContext(vk, swapchain, info);
+                    }
+                    layerLog("lsfg-vk: rebuilt swapchain context after config change");
                 }
-
-                std::cerr << "lsfg-vk: updated lsfg-vk configuration\n";
             } catch (const std::exception& e) {
-                std::cerr << "lsfg-vk: something went wrong during lsfg-vk configuration update:\n";
-                std::cerr << "- " << e.what() << '\n';
+                layerLog(std::string("lsfg-vk: config update failed: ") + e.what());
             }
         }
 
@@ -397,18 +401,15 @@ namespace {
                     queue, swapchain,
                     const_cast<void*>(info->pNext),
                     info->pImageIndices[i],
-                    { waitSemaphores.begin(), waitSemaphores.end() }
+                    { waitSemaphores.begin(), waitSemaphores.end() },
+                    info
                 );
             } catch (const ls::vulkan_error& e) {
-                if (e.error() != VK_ERROR_OUT_OF_DATE_KHR) {
-                    std::cerr << "lsfg-vk: something went wrong during lsfg-vk swapchain presentation:\n";
-                    std::cerr << "- " << e.what() << '\n';
-                } // silently swallow out-of-date errors
-
+                if (e.error() != VK_ERROR_OUT_OF_DATE_KHR)
+                    layerLog(std::string("lsfg-vk: present failed: ") + e.what());
                 result = e.error();
             } catch (const std::exception& e) {
-                std::cerr << "lsfg-vk: something went wrong during lsfg-vk swapchain presentation:\n";
-                std::cerr << "- " << e.what() << '\n';
+                layerLog(std::string("lsfg-vk: present failed: ") + e.what());
                 result = VK_ERROR_UNKNOWN;
             }
 
@@ -418,6 +419,57 @@ namespace {
 
         return result;
 #pragma clang diagnostic pop
+    }
+
+    VkResult myvkGetSwapchainImagesKHR(
+            VkDevice device,
+            VkSwapchainKHR swapchain,
+            uint32_t* count,
+            VkImage* images) {
+        const auto& it = instance_info->devices.find(device);
+        if (it == instance_info->devices.end())
+            return VK_ERROR_INITIALIZATION_FAILED;
+
+        return it->second.df().GetSwapchainImagesKHR(device, swapchain, count, images);
+    }
+
+    VkResult myvkAcquireNextImageKHR(
+            VkDevice device,
+            VkSwapchainKHR swapchain,
+            uint64_t timeout,
+            VkSemaphore semaphore,
+            VkFence fence,
+            uint32_t* idx) {
+        const auto& it = instance_info->devices.find(device);
+        if (it == instance_info->devices.end())
+            return VK_ERROR_INITIALIZATION_FAILED;
+
+        static std::atomic<uint32_t> acquireLog{0};
+        const uint32_t n = acquireLog.fetch_add(1);
+        if (n < 8)
+            layerLog("lsfg-vk: acquire begin n=" + std::to_string(n));
+
+        const auto t0 = AdaptivePacer::Clock::now();
+        auto res = it->second.df().AcquireNextImageKHR(device, swapchain, timeout,
+            semaphore, fence, idx);
+        const auto t1 = AdaptivePacer::Clock::now();
+        GameAcquireTiming::noteWait(std::chrono::duration<double>(t1 - t0).count());
+
+        if (n < 8)
+            layerLog("lsfg-vk: acquire ok n=" + std::to_string(n)
+                + " res=" + std::to_string(static_cast<int>(res))
+                + " idx=" + (idx ? std::to_string(*idx) : std::string("null")));
+        return res;
+    }
+
+    VkResult myvkAcquireNextImage2KHR(
+            VkDevice device,
+            const VkAcquireNextImageInfoKHR* info,
+            uint32_t* idx) {
+        if (!info)
+            return VK_ERROR_INITIALIZATION_FAILED;
+        return myvkAcquireNextImageKHR(device, info->swapchain, info->timeout,
+            info->semaphore, info->fence, idx);
     }
 
     void myvkDestroySwapchainKHR(
@@ -446,11 +498,16 @@ namespace {
 /// Vulkan layer entrypoint
 __attribute__((visibility("default")))
 VkResult vkNegotiateLoaderLayerInterfaceVersion(VkNegotiateLayerInterface* pVersionStruct) {
+    layerLog("lsfg-vk: vkNegotiate begin");
+    layerLog("lsfg-vk: adaptive build=refactor-13");
+
     // ensure loader compatibility
     if (!pVersionStruct
         || pVersionStruct->sType != LAYER_NEGOTIATE_INTERFACE_STRUCT
-        || pVersionStruct->loaderLayerInterfaceVersion < 2)
+        || pVersionStruct->loaderLayerInterfaceVersion < 2) {
+        layerLog("lsfg-vk: vkNegotiate rejected: incompatible loader");
         return VK_ERROR_INITIALIZATION_FAILED;
+    }
 
     // if the layer has already been initialized, skip
     if (layer_info) {
@@ -471,6 +528,9 @@ VkResult vkNegotiateLoaderLayerInterfaceVersion(VkNegotiateLayerInterface* pVers
                 { "vkDestroyDevice", VKPTR(myvkDestroyDevice) },
                 { "vkDestroyInstance", VKPTR(myvkDestroyInstance) },
                 { "vkCreateSwapchainKHR", VKPTR(myvkCreateSwapchainKHR) },
+                { "vkGetSwapchainImagesKHR", VKPTR(myvkGetSwapchainImagesKHR) },
+                { "vkAcquireNextImageKHR", VKPTR(myvkAcquireNextImageKHR) },
+                { "vkAcquireNextImage2KHR", VKPTR(myvkAcquireNextImage2KHR) },
                 { "vkQueuePresentKHR", VKPTR(myvkQueuePresentKHR) },
                 { "vkDestroySwapchainKHR", VKPTR(myvkDestroySwapchainKHR) }
 #undef VKPTR
@@ -479,14 +539,15 @@ VkResult vkNegotiateLoaderLayerInterfaceVersion(VkNegotiateLayerInterface* pVers
         };
 
         if (!layer_info->root.active()) { // skip inactive
+            layerLog("lsfg-vk: no matching profile, layer inactive");
             delete layer_info; // NOLINT (memory management)
             layer_info = nullptr;
 
             return VK_ERROR_INITIALIZATION_FAILED;
         }
+        layerLog("lsfg-vk: layer active");
     } catch (const std::exception& e) {
-        std::cerr << "lsfg-vk: something went wrong during lsfg-vk layer initialization:\n";
-        std::cerr << "- " << e.what() << '\n';
+        layerLog(std::string("lsfg-vk: layer initialization failed: ") + e.what());
 
         return VK_ERROR_INITIALIZATION_FAILED;
     }

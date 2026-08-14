@@ -1,11 +1,15 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "swapchain.hpp"
+#include "adaptive.hpp"
+#include "log.hpp"
+#include "stats.hpp"
 #include "lsfg-vk-backend/lsfgvk.hpp"
 #include "lsfg-vk-common/configuration/config.hpp"
 #include "lsfg-vk-common/helpers/errors.hpp"
 #include "lsfg-vk-common/helpers/pointers.hpp"
 #include "lsfg-vk-common/vulkan/command_buffer.hpp"
+#include "lsfg-vk-common/vulkan/fence.hpp"
 #include "lsfg-vk-common/vulkan/image.hpp"
 #include "lsfg-vk-common/vulkan/semaphore.hpp"
 #include "lsfg-vk-common/vulkan/vulkan.hpp"
@@ -14,8 +18,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
-#include <functional>
-#include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -112,6 +115,9 @@ Swapchain::Swapchain(const vk::Vulkan& vk, backend::Instance& backend,
 
     this->renderCommandBuffer.emplace(vk);
     this->renderFence.emplace(vk);
+    this->copyFence.emplace(vk);
+    this->copyDoneSemaphores.emplace_back(vk);
+    this->copyDoneSemaphores.emplace_back(vk);
     for (size_t i = 0; i < this->destinationImages.size(); i++) {
         this->passes.emplace_back(RenderPass {
             .commandBuffer = vk::CommandBuffer(vk),
@@ -126,49 +132,213 @@ Swapchain::Swapchain(const vk::Vulkan& vk, backend::Instance& backend,
             vk::Semaphore(vk)
         );
     }
+
+    if (this->profile.adaptive) {
+        layerLog("lsfg-vk: adaptive mode presents on the game thread (target_fps="
+            + std::to_string(this->profile.target_fps)
+            + ", multiplier ceiling=" + std::to_string(this->profile.multiplier) + ")");
+    }
+}
+
+size_t Swapchain::chooseGeneratedCount(AdaptivePacer::Clock::time_point now) {
+    const auto sample = this->pacer.choose(
+        static_cast<double>(this->profile.target_fps),
+        this->destinationImages.size(),
+        now,
+        GameAcquireTiming::takeWait());
+    this->lastGameDt = sample.gameDt;
+    this->lastWorkDt = sample.workDt;
+    this->lastWaitDt = sample.waitDt;
+    this->lastEmaDt = sample.emaDt;
+    this->lastAcc = sample.acc;
+    this->lastIngest = sample.ingest;
+    this->lastExtrasWant = sample.extrasWant;
+    this->lastPacedHold = sample.pacedHold;
+    return sample.genCount;
+}
+
+bool Swapchain::runtimeProfileCompatible(const ls::GameConf& next) const {
+    return next.multiplier == this->profile.multiplier
+        && next.flow_scale == this->profile.flow_scale
+        && next.performance_mode == this->profile.performance_mode
+        && next.pacing == this->profile.pacing
+        && next.gpu == this->profile.gpu;
+}
+
+bool Swapchain::tryApplyRuntimeProfile(const ls::GameConf& next) {
+    if (!runtimeProfileCompatible(next))
+        return false;
+
+    const bool changed = next.adaptive != this->profile.adaptive
+        || next.target_fps != this->profile.target_fps
+        || next.enabled != this->profile.enabled;
+    this->profile = next;
+    if (changed) {
+        layerLog("lsfg-vk: adaptive runtime update target_fps="
+            + std::to_string(this->profile.target_fps)
+            + " adaptive=" + std::string(this->profile.adaptive ? "1" : "0")
+            + " enabled=" + std::string(this->profile.enabled ? "1" : "0")
+            + " ceiling=" + std::to_string(this->profile.multiplier));
+        this->logPresentsRemaining = 8;
+    }
+    return true;
 }
 
 VkResult Swapchain::present(const vk::Vulkan& vk,
         VkQueue queue, VkSwapchainKHR swapchain,
         void* next_chain, uint32_t imageIdx,
-        const std::vector<VkSemaphore>& semaphores) {
+        const std::vector<VkSemaphore>& semaphores,
+        const VkPresentInfoKHR* originalInfo) {
+    const auto now = AdaptivePacer::Clock::now();
+    this->lastPacedMs = 0.0;
+    const size_t genCount = !this->profile.enabled
+        ? 0
+        : this->profile.adaptive
+            ? chooseGeneratedCount(now)
+            : this->destinationImages.size();
+    const bool logThis = this->profile.adaptive
+        && (this->logPresentsRemaining > 0 || this->fidx % 60 == 0);
+    if (logThis) {
+        layerLog("lsfg-vk: adaptive present fidx=" + std::to_string(this->fidx)
+            + " genCount=" + std::to_string(genCount)
+            + " game_ms=" + std::to_string(this->lastGameDt * 1000.0)
+            + " work_ms=" + std::to_string(this->lastWorkDt * 1000.0)
+            + " wait_ms=" + std::to_string(this->lastWaitDt * 1000.0)
+            + " ema_ms=" + std::to_string(this->lastEmaDt * 1000.0)
+            + " acc=" + std::to_string(this->lastAcc)
+            + " extrasWant=" + std::to_string(this->lastExtrasWant)
+            + " ingest=" + std::string(this->lastIngest ? "1" : "0")
+            + " enabled=" + std::string(this->profile.enabled ? "1" : "0")
+            + " waits=" + std::to_string(semaphores.size())
+            + " pacedHold=" + std::string(this->lastPacedHold ? "1" : "0"));
+    }
+
     const auto& swapchainImage = this->info.images.at(imageIdx);
-    const auto& sourceImage = this->sourceImages.at(this->fidx % 2);
+    VkResult result = VK_SUCCESS;
 
-    // schedule frame generation
     try {
-        this->instance.get().scheduleFrames(this->ctx.get());
-    } catch (const std::exception& e) {
-        throw ls::error("failed to schedule frames", e);
-    }
-
-    // update present mode when not using pacing
-    if (this->profile.pacing == ls::Pacing::None) {
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wunknown-warning-option"
-#pragma clang diagnostic ignored "-Wunsafe-buffer-usage"
-        auto* info = reinterpret_cast<VkSwapchainPresentModeInfoEXT*>(next_chain);
-        while (info) {
-            if (info->sType == VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_MODE_INFO_EXT) {
-                for (size_t i = 0; i < info->swapchainCount; i++)
-                    const_cast<VkPresentModeKHR*>(info->pPresentModes)[i] =
-                        VK_PRESENT_MODE_FIFO_KHR;
-            }
-
-            info = reinterpret_cast<VkSwapchainPresentModeInfoEXT*>(const_cast<void*>(info->pNext));
+        if (!this->profile.enabled) {
+            this->instance.get().scheduleFrames(this->ctx.get(), 0);
+            result = queuePresentOriginal(vk, queue, swapchain, next_chain, imageIdx,
+                semaphores, originalInfo);
+        } else if (!this->profile.adaptive || genCount > 0) {
+            // Adaptive x2/x3 uses the same present path as Fixed: one extra
+            // then the real frame, FIFO-paced. Mixing skip/generate is what
+            // kills x2 smoothness even when Gamescope FPS looks even.
+            this->instance.get().scheduleFrames(this->ctx.get(), genCount);
+            forceFifo(next_chain);
+            waitFence(vk, *this->copyFence, this->copyFenceInFlight);
+            waitFence(vk, *this->renderFence, this->renderFenceInFlight);
+            copyToSource(vk, swapchainImage, semaphores, true, VK_NULL_HANDLE, VK_NULL_HANDLE);
+            result = presentGeneratedFrames(vk, queue, swapchain, next_chain, imageIdx,
+                genCount, true);
+        } else {
+            // Adaptive skip (first frame, already at target, hitch).
+            // Binary semaphores cannot be waited by both the blit and present.
+            waitFence(vk, *this->copyFence, this->copyFenceInFlight);
+            waitFence(vk, *this->renderFence, this->renderFenceInFlight);
+            forceFifo(next_chain);
+            const bool ingest = this->fidx != 0 && this->lastIngest;
+            if (ingest)
+                this->instance.get().scheduleIngest(this->ctx.get());
+            else
+                this->instance.get().scheduleFrames(this->ctx.get(), 0);
+            const VkSemaphore copyDone =
+                this->copyDoneSemaphores.at(this->fidx % 2).handle();
+            copyToSource(vk, swapchainImage, semaphores, ingest, copyDone,
+                this->copyFence->handle());
+            this->copyFenceInFlight = true;
+            result = queuePresentOriginal(vk, queue, swapchain, next_chain, imageIdx,
+                semaphores, originalInfo, copyDone, true);
+            if (this->logPresentsRemaining > 0)
+                layerLog(std::string(ingest
+                        ? "lsfg-vk: adaptive ingest skip present ok res="
+                        : "lsfg-vk: adaptive cheap skip present ok res=")
+                    + std::to_string(static_cast<int>(result)));
         }
-#pragma clang diagnostic pop
+    } catch (...) {
+        if (this->lastGameDt <= 0.001
+                || this->lastGameDt * static_cast<double>(this->profile.target_fps) > 1.0)
+            this->pacer.markFrame(now);
+        this->fidx++;
+        throw;
     }
 
-    // wait for completion of previous frame
-    if (this->fidx && !this->renderFence->wait(vk, 150ULL * 1000 * 1000))
-        throw ls::vulkan_error(VK_TIMEOUT, "vkWaitForFences() failed");
-    this->renderFence->reset(vk);
+    // Do not advance the pacer on DXVK 2–8 ms follow-up presents. Subtracting
+    // extra-real pacing from the timestamp made those look like bursts, EMA
+    // froze, and generated FPS never caught the target.
+    if (this->lastGameDt <= 0.001
+            || this->lastGameDt * static_cast<double>(this->profile.target_fps) > 1.0)
+        this->pacer.markFrame(now);
+    this->fidx++;
+    if (logThis)
+        layerLog("lsfg-vk: adaptive present done genCount=" + std::to_string(genCount)
+            + " paced_ms=" + std::to_string(this->lastPacedMs));
+    recordFrameStats(genCount,
+        this->profile.adaptive && this->lastIngest && genCount == 0,
+        this->profile.target_fps, this->profile.adaptive);
+    if (this->logPresentsRemaining > 0)
+        this->logPresentsRemaining--;
+    return result;
+}
 
-    // copy swapchain image into backend source image
+VkResult Swapchain::queuePresentOriginal(const vk::Vulkan& vk, VkQueue queue,
+        VkSwapchainKHR swapchain, void* next_chain, uint32_t imageIdx,
+        const std::vector<VkSemaphore>& semaphores,
+        const VkPresentInfoKHR* originalInfo,
+        VkSemaphore extraWait, bool replaceAppWaits) {
+    std::vector<VkSemaphore> waits;
+    if (replaceAppWaits) {
+        if (extraWait)
+            waits.push_back(extraWait);
+    } else {
+        waits = semaphores;
+        if (originalInfo && originalInfo->pWaitSemaphores && originalInfo->waitSemaphoreCount) {
+            waits.assign(originalInfo->pWaitSemaphores,
+                originalInfo->pWaitSemaphores + originalInfo->waitSemaphoreCount);
+        }
+        if (extraWait)
+            waits.push_back(extraWait);
+    }
+
+    VkResult res = VK_SUCCESS;
+    if (originalInfo && originalInfo->swapchainCount == 1) {
+        VkPresentInfoKHR info = *originalInfo;
+        info.waitSemaphoreCount = static_cast<uint32_t>(waits.size());
+        info.pWaitSemaphores = waits.empty() ? nullptr : waits.data();
+        res = vk.df().QueuePresentKHR(queue, &info);
+    } else {
+        const VkPresentInfoKHR presentInfo{
+            .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+            .pNext = next_chain,
+            .waitSemaphoreCount = static_cast<uint32_t>(waits.size()),
+            .pWaitSemaphores = waits.empty() ? nullptr : waits.data(),
+            .swapchainCount = 1,
+            .pSwapchains = &swapchain,
+            .pImageIndices = &imageIdx,
+        };
+        res = vk.df().QueuePresentKHR(queue, &presentInfo);
+    }
+    if (res != VK_SUCCESS && res != VK_SUBOPTIMAL_KHR)
+        throw ls::vulkan_error(res, "vkQueuePresentKHR() failed");
+    return res;
+}
+
+void Swapchain::waitFence(const vk::Vulkan& vk, const vk::Fence& fence, bool& inFlight) {
+    if (!inFlight)
+        return;
+    if (!fence.wait(vk, 150ULL * 1000 * 1000))
+        throw ls::vulkan_error(VK_TIMEOUT, "vkWaitForFences() failed");
+    fence.reset(vk);
+    inFlight = false;
+}
+
+void Swapchain::copyToSource(const vk::Vulkan& vk, VkImage swapchainImage,
+        const std::vector<VkSemaphore>& waitSemaphores, bool signalSync,
+        VkSemaphore copyDone, VkFence fence) {
+    const auto& sourceImage = this->sourceImages.at(this->fidx % 2);
     const auto& cmdbuf = *this->renderCommandBuffer;
     cmdbuf.begin(vk);
-
     cmdbuf.blitImage(vk,
         {
             barrierHelper(swapchainImage,
@@ -195,21 +365,32 @@ VkResult Swapchain::present(const vk::Vulkan& vk,
             ),
         }
     );
-
     cmdbuf.end(vk);
+    std::vector<VkSemaphore> signals;
+    if (copyDone)
+        signals.push_back(copyDone);
     cmdbuf.submit(vk,
-        semaphores, VK_NULL_HANDLE, 0,
-        {}, this->syncSemaphore->handle(), this->idx++
-    );
+        waitSemaphores, VK_NULL_HANDLE, 0,
+        signals,
+        signalSync ? this->syncSemaphore->handle() : VK_NULL_HANDLE,
+        signalSync ? this->idx++ : 0,
+        fence);
+}
 
-    for (size_t i = 0; i < this->destinationImages.size(); i++) {
+VkResult Swapchain::presentGeneratedFrames(const vk::Vulkan& vk,
+        VkQueue queue, VkSwapchainKHR swapchain,
+        void* next_chain, uint32_t imageIdx,
+        size_t genCount, bool presentRealWithInternalSemaphores) {
+    VkResult res = VK_SUCCESS;
+    for (size_t i = 0; i < genCount; i++) {
         auto& pcs = this->postCopySemaphores.at(this->idx % this->postCopySemaphores.size());
         auto& destinationImage = this->destinationImages.at(i);
         auto& pass = this->passes.at(i);
 
-        // acquire swapchain image
         uint32_t aqImageIdx{};
-        auto res = vk.df().AcquireNextImageKHR(vk.dev(), swapchain,
+        if (this->logPresentsRemaining > 0)
+            layerLog("lsfg-vk: adaptive acquire generated i=" + std::to_string(i));
+        res = vk.df().AcquireNextImageKHR(vk.dev(), swapchain,
             UINT64_MAX, pass.acquireSemaphore.handle(),
             VK_NULL_HANDLE,
             &aqImageIdx
@@ -219,11 +400,10 @@ VkResult Swapchain::present(const vk::Vulkan& vk,
 
         const auto& aquiredSwapchainImage = this->info.images.at(aqImageIdx);
 
-        // copy backend destination image into swapchain image
-        auto& cmdbuf = pass.commandBuffer;
-        cmdbuf.begin(vk);
+        auto& passCmd = pass.commandBuffer;
+        passCmd.begin(vk);
 
-        cmdbuf.blitImage(vk,
+        passCmd.blitImage(vk,
             {
                 barrierHelper(destinationImage.handle(),
                     VK_ACCESS_NONE,
@@ -251,8 +431,9 @@ VkResult Swapchain::present(const vk::Vulkan& vk,
         );
 
         std::vector<VkSemaphore> waitSemaphores{ pass.acquireSemaphore.handle() };
-        if (i) { // non-first pass
-            const auto& prevPCS = this->postCopySemaphores.at((this->idx - 1) % this->postCopySemaphores.size());
+        if (i) {
+            const auto& prevPCS = this->postCopySemaphores.at(
+                (this->idx - 1) % this->postCopySemaphores.size());
             waitSemaphores.push_back(prevPCS.second.handle());
         }
 
@@ -261,14 +442,15 @@ VkResult Swapchain::present(const vk::Vulkan& vk,
             pcs.second.handle()
         };
 
-        cmdbuf.end(vk);
-        cmdbuf.submit(vk,
+        passCmd.end(vk);
+        passCmd.submit(vk,
             waitSemaphores, this->syncSemaphore->handle(), this->idx,
             signalSemaphores, VK_NULL_HANDLE, 0,
-            i == this->destinationImages.size() - 1 ? this->renderFence->handle() : VK_NULL_HANDLE
+            i == genCount - 1 ? this->renderFence->handle() : VK_NULL_HANDLE
         );
+        if (i == genCount - 1)
+            this->renderFenceInFlight = true;
 
-        // present swapchain image
         const VkPresentInfoKHR presentInfo{
             .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
             .pNext = i ? nullptr : next_chain,
@@ -278,15 +460,17 @@ VkResult Swapchain::present(const vk::Vulkan& vk,
             .pSwapchains = &swapchain,
             .pImageIndices = &aqImageIdx,
         };
-        res = vk.df().QueuePresentKHR(queue,
-            &presentInfo);
+        res = vk.df().QueuePresentKHR(queue, &presentInfo);
         if (res != VK_SUCCESS && res != VK_SUBOPTIMAL_KHR)
             throw ls::vulkan_error(res, "vkQueuePresentKHR() failed");
 
+        waitDisplaySlot();
         this->idx++;
     }
 
-    // present original swapchain image
+    if (!presentRealWithInternalSemaphores)
+        return res;
+
     auto& lastPCS = this->postCopySemaphores.at((this->idx - 1) % this->postCopySemaphores.size());
     const VkPresentInfoKHR presentInfo{
         .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
@@ -296,10 +480,37 @@ VkResult Swapchain::present(const vk::Vulkan& vk,
         .pSwapchains = &swapchain,
         .pImageIndices = &imageIdx,
     };
-    auto res = vk.df().QueuePresentKHR(queue, &presentInfo);
+    res = vk.df().QueuePresentKHR(queue, &presentInfo);
     if (res != VK_SUCCESS && res != VK_SUBOPTIMAL_KHR)
         throw ls::vulkan_error(res, "vkQueuePresentKHR() failed");
-
-    this->fidx++;
     return res;
+}
+
+void Swapchain::waitDisplaySlot() {
+    if (!this->profile.adaptive)
+        return;
+    const double slept = sleepDisplaySlot(
+        static_cast<double>(this->profile.target_fps));
+    this->lastPacedMs += slept * 1000.0;
+    this->pacer.notePacing(slept);
+}
+
+void Swapchain::forceFifo(void* next_chain) const {
+    if (this->profile.pacing != ls::Pacing::None)
+        return;
+
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunknown-warning-option"
+#pragma clang diagnostic ignored "-Wunsafe-buffer-usage"
+    auto* info = reinterpret_cast<VkSwapchainPresentModeInfoEXT*>(next_chain);
+    while (info) {
+        if (info->sType == VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_MODE_INFO_EXT) {
+            for (size_t i = 0; i < info->swapchainCount; i++)
+                const_cast<VkPresentModeKHR*>(info->pPresentModes)[i] =
+                    VK_PRESENT_MODE_FIFO_KHR;
+        }
+
+        info = reinterpret_cast<VkSwapchainPresentModeInfoEXT*>(const_cast<void*>(info->pNext));
+    }
+#pragma clang diagnostic pop
 }

@@ -33,8 +33,14 @@ namespace ls {
         std::vector<std::string> active_in;
         /// gpu to use (in case of multiple)
         std::optional<std::string> gpu;
-        /// multiplier for frame generation
+        /// multiplier for frame generation (max/ceiling when adaptive is enabled)
         size_t multiplier{2};
+        /// when false, present the game frame with no generated extras (hot-reloadable)
+        bool enabled{true};
+        /// generate only as many frames as needed to approach target_fps
+        bool adaptive{false};
+        /// target displayed framerate for adaptive mode
+        float target_fps{60.0F};
         /// non-inverted flow scale
         float flow_scale{1.00F};
         /// use performance mode

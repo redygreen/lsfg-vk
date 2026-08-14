@@ -1,0 +1,218 @@
+import { useEffect } from "react";
+import { PanelSection, showModal, ButtonItem, PanelSectionRow } from "@decky/ui";
+import { useInstallationStatus, useDllDetection, useLsfgConfig } from "../hooks/useLsfgHooks";
+import { useProfileManagement } from "../hooks/useProfileManagement";
+import { useInstallationActions } from "../hooks/useInstallationActions";
+import { StatusDisplay } from "./StatusDisplay";
+import { InstallationButton } from "./InstallationButton";
+import { ConfigurationSection } from "./ConfigurationSection";
+import { ProfileManagement } from "./ProfileManagement";
+import { UsageInstructions } from "./UsageInstructions";
+import { SmartClipboardButton } from "./SmartClipboardButton";
+import { FgmodClipboardButton } from "./FgmodClipboardButton";
+import { FpsMultiplierControl } from "./FpsMultiplierControl";
+import { AdaptiveControls } from "./AdaptiveControls";
+import { AdaptiveStats } from "./AdaptiveStats";
+import { NerdStuffModal } from "./NerdStuffModal";
+import { FlatpaksModal } from "./FlatpaksModal";
+import { ConfigurationData } from "../config/configSchema";
+import t from '../i18n/i18n';
+
+export function Content() {
+  const {
+    isInstalled,
+    installationStatus,
+    setIsInstalled,
+    setInstallationStatus
+  } = useInstallationStatus();
+
+  const { dllDetected, dllDetectionStatus } = useDllDetection();
+
+  const {
+    config,
+    loadLsfgConfig,
+    updateConfig
+  } = useLsfgConfig();
+
+  const {
+    currentProfile,
+    updateProfileConfig,
+    loadProfiles
+  } = useProfileManagement();
+
+  const { isInstalling, isUninstalling, handleInstall, handleUninstall } = useInstallationActions();
+
+  useEffect(() => {
+    if (isInstalled) {
+      loadLsfgConfig();
+    }
+  }, [isInstalled, loadLsfgConfig]);
+
+  const applyConfig = async (patch: Partial<ConfigurationData>) => {
+    const newConfig = { ...config, ...patch };
+    if (currentProfile) {
+      const result = await updateProfileConfig(currentProfile, newConfig);
+      if (result.success) {
+        await loadLsfgConfig();
+      }
+    } else {
+      await updateConfig(newConfig);
+    }
+  };
+
+  const handleConfigChange = async (fieldName: keyof ConfigurationData, value: boolean | number | string) => {
+    await applyConfig({ [fieldName]: value } as Partial<ConfigurationData>);
+  };
+
+  const onInstall = () => {
+    handleInstall(setIsInstalled, setInstallationStatus, loadLsfgConfig);
+  };
+
+  const onUninstall = () => {
+    handleUninstall(setIsInstalled, setInstallationStatus);
+  };
+
+  const handleShowNerdStuff = () => {
+    showModal(<NerdStuffModal />);
+  };
+
+  const handleShowFlatpaks = () => {
+    showModal(<FlatpaksModal />);
+  };
+
+  return (
+    <PanelSection>
+      {!isInstalled && (
+        <>
+          <InstallationButton
+            isInstalled={isInstalled}
+            isInstalling={isInstalling}
+            isUninstalling={isUninstalling}
+            onInstall={onInstall}
+            onUninstall={onUninstall}
+          />
+
+          <StatusDisplay
+            dllDetected={dllDetected}
+            dllDetectionStatus={dllDetectionStatus}
+            isInstalled={isInstalled}
+            installationStatus={installationStatus}
+          />
+        </>
+      )}
+
+      {isInstalled && (
+        <>
+          <PanelSectionRow>
+            <div
+              style={{
+                fontSize: "14px",
+                fontWeight: "bold",
+                marginTop: "8px",
+                marginBottom: "6px",
+                borderBottom: "1px solid rgba(255, 255, 255, 0.2)",
+                paddingBottom: "3px",
+                color: "white"
+              }}
+            >
+              {t('CONTENT_ADAPTIVE_TITLE', 'Adaptive')}
+            </div>
+          </PanelSectionRow>
+
+          <AdaptiveControls
+            config={config}
+            onConfigChange={handleConfigChange}
+          />
+
+          <AdaptiveStats />
+
+          <PanelSectionRow>
+            <div
+              style={{
+                fontSize: "14px",
+                fontWeight: "bold",
+                marginTop: "8px",
+                marginBottom: "6px",
+                borderBottom: "1px solid rgba(255, 255, 255, 0.2)",
+                paddingBottom: "3px",
+                color: "white"
+              }}
+            >
+              {config.adaptive
+                ? t('CONTENT_MAX_MULTIPLIER', 'Max Multiplier')
+                : t('CONTENT_FPS_MULTIPLIER', 'FPS Multiplier')}
+            </div>
+          </PanelSectionRow>
+
+          <FpsMultiplierControl
+            config={config}
+            onConfigPatch={applyConfig}
+          />
+        </>
+      )}
+
+      {isInstalled && (
+        <ProfileManagement
+          currentProfile={currentProfile}
+          onProfileChange={async () => {
+            await loadProfiles();
+            await loadLsfgConfig();
+          }}
+        />
+      )}
+
+      {isInstalled && (
+        <ConfigurationSection
+          config={config}
+          onConfigChange={handleConfigChange}
+        />
+      )}
+
+      {isInstalled && (
+        <>
+          <SmartClipboardButton />
+          <FgmodClipboardButton />
+        </>
+      )}
+
+      <UsageInstructions />
+
+      <PanelSectionRow>
+        <ButtonItem
+          layout="below"
+          onClick={handleShowNerdStuff}
+        >
+          {t('CONTENT_NERD_STUFF', 'Nerd Stuff')}
+        </ButtonItem>
+      </PanelSectionRow>
+
+      <PanelSectionRow>
+        <ButtonItem
+          layout="below"
+          onClick={handleShowFlatpaks}
+        >
+          {t('CONTENT_FLATPAK_SETUP', 'Flatpak Setup')}
+        </ButtonItem>
+      </PanelSectionRow>
+
+      {isInstalled && (
+        <>
+          <StatusDisplay
+            dllDetected={dllDetected}
+            dllDetectionStatus={dllDetectionStatus}
+            isInstalled={isInstalled}
+            installationStatus={installationStatus}
+          />
+
+          <InstallationButton
+            isInstalled={isInstalled}
+            isInstalling={isInstalling}
+            isUninstalling={isUninstalling}
+            onInstall={onInstall}
+            onUninstall={onUninstall}
+          />
+        </>
+      )}
+    </PanelSection>
+  );
+}

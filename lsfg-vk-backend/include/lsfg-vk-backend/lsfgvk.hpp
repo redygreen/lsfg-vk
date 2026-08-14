@@ -109,10 +109,66 @@ namespace lsfgvk::backend {
         ///
         /// Schedule a new set of generated frames.
         ///
+        /// Generates every destination image owned by the context. Equivalent to
+        /// scheduleFrames(context, destination count).
+        ///
         /// @param context Context to use.
         /// @throws backend::error on failure
         ///
         void scheduleFrames(Context& context);
+
+        ///
+        /// Schedule a variable number of generated frames.
+        ///
+        /// @param context Context to use.
+        /// @param genCount Number of intermediate frames to generate (0 .. destination count).
+        ///                 Timestamps are rewritten to (i+1)/(genCount+1). A zero count only
+        ///                 advances the internal real-frame index and performs no GPU work.
+        /// @throws backend::error on failure
+        ///
+        void scheduleFrames(Context& context, size_t genCount);
+
+        ///
+        /// Ingest the current real frame into optical-flow history without
+        /// generating destination images.
+        ///
+        /// Same GPU handshake as scheduleFrames: the prepass waits on the
+        /// context timeline so the caller can copy the real frame into the
+        /// source slot and signal that timeline afterwards. Advances the
+        /// real-frame index and the timeline index by one.
+        ///
+        /// @param context Context to use.
+        /// @throws backend::error on failure
+        ///
+        void scheduleIngest(Context& context);
+
+        ///
+        /// Run optical-flow prepass for the current real-frame pair.
+        ///
+        /// The caller must have copied the latest real frame into the source
+        /// image for realFidx and finished that copy on the GPU. Does not
+        /// generate output frames. Subsequent scheduleOne() calls reuse this
+        /// prepass until the next schedulePrepass().
+        ///
+        /// @param context Context to use.
+        /// @param realFidx Real-frame index matching the source ping-pong slot.
+        /// @throws backend::error on failure
+        ///
+        void schedulePrepass(Context& context, size_t realFidx);
+
+        ///
+        /// Generate a single interpolated frame at an explicit timestamp.
+        ///
+        /// Writes destination image 0. Requires a preceding schedulePrepass()
+        /// for the current real-frame pair.
+        ///
+        /// @param context Context to use.
+        /// @param timestamp Interpolation position in (0, 1) between the previous
+        ///                  and current real frames.
+        /// @return Timeline value signaled on the context sync semaphore when ready.
+        /// @throws backend::error on failure
+        ///
+        uint64_t scheduleOne(Context& context, float timestamp);
 
         ///
         /// Close a frame generation context

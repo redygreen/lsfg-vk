@@ -62,6 +62,12 @@ namespace lsfgvk::backend {
         size_t index, size_t total, float invFlow
     );
 
+    /// get a constant buffer with an explicit interpolation timestamp in (0, 1)
+    /// @param timestamp interpolation position between the previous and current real frame
+    /// @param invFlow inverted flow scale value
+    /// @return prefilled constant buffer
+    ConstantBuffer getConstantBuffer(float timestamp, float invFlow);
+
     /// round down a VkExtent2D
     /// @param extent the extent to shift
     /// @param i the amount to shift by

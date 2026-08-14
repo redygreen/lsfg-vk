@@ -108,13 +108,13 @@ namespace {
     }
     /// parse the global configuration
     GlobalConf parseGlobalConf(const toml::table& tbl) {
-        const GlobalConf conf{
+        GlobalConf conf{
             .dll = tbl["dll"].value<std::string>(),
             .allow_fp16 = tbl["allow_fp16"].value_or(true)
         };
 
         if (conf.dll && !std::filesystem::exists(*conf.dll))
-            throw ls::error("path to dll is invalid");
+            conf.dll = std::nullopt;
 
         return conf;
     }
@@ -125,6 +125,9 @@ namespace {
             .active_in = activityFromString(tbl["active_in"]),
             .gpu = tbl["gpu"].value<std::string>(),
             .multiplier = tbl["multiplier"].value_or(2U),
+            .enabled = tbl["enabled"].value_or(true),
+            .adaptive = tbl["adaptive"].value_or(false),
+            .target_fps = tbl["target_fps"].value_or(60.0F),
             .flow_scale = tbl["flow_scale"].value_or(1.0F),
             .performance_mode = tbl["performance_mode"].value_or(false),
             .pacing = parcingFromString(tbl["pacing"].value_or<std::string>("none"))
@@ -132,6 +135,8 @@ namespace {
 
         if (conf.multiplier <= 1)
             throw ls::error("multiplier must be greater than 1");
+        if (conf.target_fps < 1.0F || conf.target_fps > 1000.0F)
+            throw ls::error("target_fps must be between 1 and 1000");
         if (conf.flow_scale < 0.25F || conf.flow_scale > 1.0F)
             throw ls::error("flow_scale must be between 0.25 and 1.0");
 
@@ -164,6 +169,9 @@ namespace {
             .gpu = std::nullopt,
 
             .multiplier = 2,
+            .enabled = true,
+            .adaptive = false,
+            .target_fps = 60.0F,
             .flow_scale = 1.0F,
             .performance_mode = false,
             .pacing = Pacing::None
@@ -173,6 +181,12 @@ namespace {
         if (gpu) conf.gpu = std::string(gpu);
         const char* multiplier = std::getenv("LSFGVK_MULTIPLIER");
         if (multiplier) conf.multiplier = static_cast<size_t>(std::stoul(multiplier));
+        const char* enabled = std::getenv("LSFGVK_ENABLED");
+        if (enabled) conf.enabled = std::string(enabled) != "0";
+        const char* adaptive = std::getenv("LSFGVK_ADAPTIVE");
+        if (adaptive) conf.adaptive = std::string(adaptive) == "1";
+        const char* target_fps = std::getenv("LSFGVK_TARGET_FPS");
+        if (target_fps) conf.target_fps = std::stof(target_fps);
         const char* flow_scale = std::getenv("LSFGVK_FLOW_SCALE");
         if (flow_scale) conf.flow_scale = std::stof(flow_scale);
         const char* performance = std::getenv("LSFGVK_PERFORMANCE_MODE");
@@ -182,6 +196,8 @@ namespace {
 
         if (conf.multiplier <= 1)
             throw ls::error("multiplier must be greater than 1");
+        if (conf.target_fps < 1.0F || conf.target_fps > 1000.0F)
+            throw ls::error("target_fps must be between 1 and 1000");
         if (conf.flow_scale < 0.25F || conf.flow_scale > 1.0F)
             throw ls::error("flow_scale must be between 0.25 and 1.0");
 
@@ -240,6 +256,9 @@ void ConfigFile::write(const std::filesystem::path& path) const {
         if (conf.gpu)
             profile.insert("gpu", conf.gpu.value_or(""));
         profile.insert("multiplier", static_cast<int64_t>(conf.multiplier));
+        profile.insert("enabled", conf.enabled);
+        profile.insert("adaptive", conf.adaptive);
+        profile.insert("target_fps", conf.target_fps);
         profile.insert("flow_scale", conf.flow_scale);
         profile.insert("performance_mode", conf.performance_mode);
         switch (conf.pacing) {

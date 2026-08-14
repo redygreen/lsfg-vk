@@ -1,0 +1,11 @@
+{
+  "name": "Decky LSFG-VK Adaptive",
+  "author": "redygreen (fork of xXJSONDeruloXx/decky-lsfg-vk)",
+  "flags": [],
+  "api_version": 1,
+  "publish": {
+    "tags": ["installer", "vulkan", "lsfg", "framegen", "lossless", "scaling", "adaptive"],
+    "description": "Install and configure the Adaptive lsfg-vk Vulkan layer on Steam Deck. Isolated from the official Decky LSFG-VK plugin.",
+    "image": "https://raw.githubusercontent.com/xXJSONDeruloXx/decky-lsfg-vk/refs/heads/main/assets/Decky_LSFG-VK_Master_1.png"
+  }
+}
