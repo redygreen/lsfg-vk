@@ -128,6 +128,7 @@ namespace lsfgvk::layer {
         double lastPacedMs{0.0};
         size_t logPresentsRemaining{16};
         bool lastIngest{false};
+        bool lastPacedHold{false};
         bool renderFenceInFlight{false};
         bool copyFenceInFlight{false};
     };

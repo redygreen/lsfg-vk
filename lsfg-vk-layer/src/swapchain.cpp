@@ -153,6 +153,7 @@ size_t Swapchain::chooseGeneratedCount(AdaptivePacer::Clock::time_point now) {
     this->lastAcc = sample.acc;
     this->lastIngest = sample.ingest;
     this->lastExtrasWant = sample.extrasWant;
+    this->lastPacedHold = sample.pacedHold;
     return sample.genCount;
 }
 
@@ -208,7 +209,8 @@ VkResult Swapchain::present(const vk::Vulkan& vk,
             + " extrasWant=" + std::to_string(this->lastExtrasWant)
             + " ingest=" + std::string(this->lastIngest ? "1" : "0")
             + " enabled=" + std::string(this->profile.enabled ? "1" : "0")
-            + " waits=" + std::to_string(semaphores.size()));
+            + " waits=" + std::to_string(semaphores.size())
+            + " pacedHold=" + std::string(this->lastPacedHold ? "1" : "0"));
     }
 
     const auto& swapchainImage = this->info.images.at(imageIdx);
@@ -487,8 +489,10 @@ VkResult Swapchain::presentGeneratedFrames(const vk::Vulkan& vk,
 void Swapchain::waitDisplaySlot() {
     if (!this->profile.adaptive)
         return;
-    this->lastPacedMs += sleepDisplaySlot(
-        static_cast<double>(this->profile.target_fps)) * 1000.0;
+    const double slept = sleepDisplaySlot(
+        static_cast<double>(this->profile.target_fps));
+    this->lastPacedMs += slept * 1000.0;
+    this->pacer.notePacing(slept);
 }
 
 void Swapchain::forceFifo(void* next_chain) const {

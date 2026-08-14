@@ -176,6 +176,112 @@ int main() {
     }
 
     {
+        // Extra-vsync sleep inflates the next present-to-present interval
+        // (16.7 ms game + 11 ms sleep ≈ 22 ms). Training EMA on that snaps
+        // extrasWant to 1 and locks Adaptive at 45+45. Hold EMA instead.
+        AdaptivePacer pacer;
+        pacer.markFrame(t0);
+        auto t = t0;
+        AdaptivePacer::Sample last{};
+        for (int i = 0; i < 24; ++i) {
+            t += std::chrono::microseconds(16667);
+            last = step(pacer, 90, t);
+            pacer.markFrame(t);
+        }
+        expect(std::abs(last.emaDt - (1.0 / 60.0)) < 0.002,
+            "60 Hz EMA settles near 16.7 ms before extra pacing");
+        expect(last.extrasWant > 0.35 && last.extrasWant < 0.65,
+            "60 Hz extrasWant stays near 0.5 before extra pacing");
+
+        int extras = 0;
+        int counted = 0;
+        double emaSum = 0.0;
+        for (int i = 0; i < 80; ++i) {
+            if (last.genCount > 0)
+                pacer.notePacing(0.011111);
+            const int dtUs = last.genCount > 0 ? 22222 : 16667;
+            t += std::chrono::microseconds(dtUs);
+            last = step(pacer, 90, t);
+            pacer.markFrame(t);
+            if (i < 8)
+                continue;
+            extras += static_cast<int>(last.genCount);
+            emaSum += last.emaDt;
+            ++counted;
+            if (dtUs == 22222)
+                expect(last.pacedHold,
+                    "interval after extra sleep reports pacedHold");
+        }
+        const double mean = counted ? static_cast<double>(extras) / counted : 0.0;
+        const double emaMean = counted ? emaSum / counted : 0.0;
+        expect(emaMean < 0.019,
+            "extra-vsync sleep does not pull EMA up to 22 ms");
+        expect(mean > 0.35 && mean < 0.70,
+            "paced 60 Hz at 90 still dithers ~0.5 extras, not locked x2");
+        expect(last.extrasWant < 0.85,
+            "paced 60 Hz extrasWant does not snap to a full extra");
+    }
+
+    {
+        // Worst case: every wall interval is 22 ms because extras always
+        // sleep. Once EMA is native 16.7 ms, notePacing must not lock x2.
+        AdaptivePacer pacer;
+        pacer.markFrame(t0);
+        auto t = t0;
+        AdaptivePacer::Sample last{};
+        for (int i = 0; i < 20; ++i) {
+            t += std::chrono::microseconds(16667);
+            last = step(pacer, 90, t);
+            pacer.markFrame(t);
+        }
+        int extras = 0;
+        int counted = 0;
+        for (int i = 0; i < 60; ++i) {
+            pacer.notePacing(0.011111);
+            t += std::chrono::microseconds(22222);
+            last = step(pacer, 90, t);
+            pacer.markFrame(t);
+            expect(last.pacedHold, "inflated interval holds EMA");
+            extras += static_cast<int>(last.genCount);
+            ++counted;
+        }
+        const double mean = counted ? static_cast<double>(extras) / counted : 0.0;
+        expect(last.emaDt < 0.018,
+            "always-inflated intervals do not retrain EMA toward 22 ms");
+        expect(mean > 0.35 && mean < 0.70,
+            "always-inflated 60 Hz still dithers instead of locking x2");
+    }
+
+    {
+        // A true 45 Hz game trains EMA on unpaced presents, then extra
+        // sleep must not drop it back toward 60 Hz.
+        AdaptivePacer pacer;
+        pacer.markFrame(t0);
+        auto t = t0;
+        AdaptivePacer::Sample last{};
+        for (int i = 0; i < 12; ++i) {
+            t += std::chrono::microseconds(22222);
+            last = step(pacer, 90, t);
+            pacer.markFrame(t);
+        }
+        expect(last.genCount == 1, "native 45 Hz generates before pacing");
+        int extras = 0;
+        int counted = 0;
+        for (int i = 0; i < 40; ++i) {
+            if (last.genCount > 0)
+                pacer.notePacing(0.011111);
+            t += std::chrono::microseconds(22222);
+            last = step(pacer, 90, t);
+            pacer.markFrame(t);
+            extras += static_cast<int>(last.genCount);
+            ++counted;
+        }
+        const double mean = counted ? static_cast<double>(extras) / counted : 0.0;
+        expect(mean > 0.9, "native 45 Hz stays at x2 after extra-vsync sleep");
+        expect(last.emaDt > 0.020, "native 45 Hz EMA stays near 22 ms");
+    }
+
+    {
         AdaptivePacer pacer;
         pacer.markFrame(t0);
         auto t = t0;

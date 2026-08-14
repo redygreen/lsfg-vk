@@ -36,6 +36,12 @@ namespace lsfgvk::layer {
     /// FIFO wait from our own extras is not "already at target": 16 ms
     /// present-to-present with an 11 ms acquire wait still wants Adaptive
     /// extras. Only a present interval already at the target drops them.
+    ///
+    /// Sleep after a generated extra (so Gamescope can show it on its own
+    /// vsync) sits inside the next present-to-present interval. Training
+    /// EMA on that interval snaps extrasWant to 1 and locks Adaptive at
+    /// 45+45. `notePacing` holds EMA and still dithers from native frame
+    /// time. A true 45 Hz game trains EMA on unpaced presents first.
     class AdaptivePacer {
     public:
         using Clock = std::chrono::steady_clock;
@@ -43,6 +49,7 @@ namespace lsfgvk::layer {
         struct Sample {
             size_t genCount{0};
             bool ingest{false};
+            bool pacedHold{false};
             double extrasWant{0.0};
             double gameDt{0.0};
             double workDt{0.0};
@@ -57,6 +64,9 @@ namespace lsfgvk::layer {
             out.waitDt = acquireWaitSec < 0.0 ? 0.0 : acquireWaitSec;
             out.acc = this->acc;
             out.emaDt = this->emaDt.value_or(0.0);
+            const bool pacedPrev = this->lastPacedSec > 0.0005;
+            this->lastPacedSec = 0.0;
+            out.pacedHold = pacedPrev;
 
             if (!this->frameAt.has_value()) {
                 this->acc = 0.0;
@@ -99,11 +109,16 @@ namespace lsfgvk::layer {
             }
 
             constexpr double kAlpha = 0.2;
-            if (!this->emaDt.has_value())
-                this->emaDt = dt;
-            else
-                this->emaDt = kAlpha * dt + (1.0 - kAlpha) * *this->emaDt;
-            this->emaDt = std::clamp(*this->emaDt, 0.001, 0.25);
+            if (!pacedPrev) {
+                if (!this->emaDt.has_value())
+                    this->emaDt = dt;
+                else
+                    this->emaDt = kAlpha * dt + (1.0 - kAlpha) * *this->emaDt;
+                this->emaDt = std::clamp(*this->emaDt, 0.001, 0.25);
+            } else if (!this->emaDt.has_value()) {
+                out.genCount = 0;
+                return out;
+            }
             out.emaDt = *this->emaDt;
 
             if (maxGen == 0) {
@@ -139,10 +154,17 @@ namespace lsfgvk::layer {
             this->frameAt = now;
         }
 
+        /// Call after sleeping one display slot for a generated extra.
+        /// The next choose() will not train EMA on that inflated interval.
+        void notePacing(double seconds) {
+            this->lastPacedSec += std::max(0.0, seconds);
+        }
+
     private:
         std::optional<Clock::time_point> frameAt;
         std::optional<double> emaDt;
         double acc{0.0};
+        double lastPacedSec{0.0};
     };
 
     /// Sleep one Adaptive display slot (1/target_fps).
