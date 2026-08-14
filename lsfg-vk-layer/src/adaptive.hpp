@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstddef>
 #include <optional>
+#include <thread>
 
 namespace lsfgvk::layer {
 
@@ -24,16 +25,17 @@ namespace lsfgvk::layer {
 
     /// How many interpolated frames to insert before this real present.
     ///
-    /// Original LS Adaptive presents from its own capture window at the
-    /// panel rate with fractional timestamps. This layer only runs inside
-    /// the game's QueuePresent, so smoothness like Fixed x2 needs a stable
-    /// integer extra count (extra-real-extra-real). extrasWant =
-    /// target × interval − 1, then locked to 0/1/2/… with hysteresis.
+    /// extras = target × interval − 1, remainder-dithered so 60 Hz at 90
+    /// averages 0.5 extras (30 generated), not a sticky 2×. Values within
+    /// 0.15 of an integer snap (47 Hz at 90 stays at 1 extra) so FIFO does
+    /// not hitch on a 9% skip. multiplier is a ceiling.
     ///
-    /// FIFO wait from our own extras is not "already at target": 45 Hz
-    /// with an 11 ms acquire wait still wants x2. Only a present interval
-    /// that is already at the target (dt × target ≈ 1) drops extras.
-    /// multiplier is a ceiling.
+    /// `ingest` is set on a dithered skip that will generate soon, so LSFG
+    /// temporal state stays warm without optical-flow at native rate.
+    ///
+    /// FIFO wait from our own extras is not "already at target": 16 ms
+    /// present-to-present with an 11 ms acquire wait still wants Adaptive
+    /// extras. Only a present interval already at the target drops them.
     class AdaptivePacer {
     public:
         using Clock = std::chrono::steady_clock;
@@ -58,7 +60,6 @@ namespace lsfgvk::layer {
 
             if (!this->frameAt.has_value()) {
                 this->acc = 0.0;
-                this->locked.reset();
                 out.genCount = 0;
                 return out;
             }
@@ -75,17 +76,15 @@ namespace lsfgvk::layer {
 
             // Loading hitch, or a same-timestamp probe.
             if (dt > 0.100 || dt < 0.001) {
-                this->locked.reset();
                 out.genCount = 0;
                 return out;
             }
 
             // Already presenting at the target (vsync-bound at 90, etc.).
-            // Do not use workDt: extra FIFO presents add ~1/target acquire
-            // wait at 45 Hz, and treating that as "at target" turns x2 off.
+            // Use present-to-present dt, not workDt: extra FIFO presents add
+            // ~1/target acquire wait and would otherwise turn Adaptive off.
             if (out.waitDt > 0.003 && dt * target <= 1.08) {
                 this->acc *= 0.35;
-                this->locked.reset();
                 out.acc = this->acc;
                 out.genCount = 0;
                 return out;
@@ -116,25 +115,23 @@ namespace lsfgvk::layer {
                 target * *this->emaDt - 1.0, 0.0, static_cast<double>(maxGen));
             out.extrasWant = extrasWant;
 
-            // Enter the next integer a bit below 0.5 so 55–62 Hz at 90
-            // locks to x2 instead of dithering. Leave only when clearly
-            // near the target (want ≲ 0.30 for dropping 1 extra).
-            if (!this->locked.has_value()) {
-                size_t initial = 0;
-                if (extrasWant >= 0.40)
-                    initial = std::min(maxGen, std::max<size_t>(1,
-                        static_cast<size_t>(std::lround(extrasWant))));
-                this->locked = initial;
-            } else {
-                const double cur = static_cast<double>(*this->locked);
-                if (extrasWant >= cur + 0.40 && *this->locked < maxGen)
-                    this->locked = *this->locked + 1;
-                else if (extrasWant <= cur - 0.70 && *this->locked > 0)
-                    this->locked = *this->locked - 1;
+            constexpr double kSnap = 0.15;
+            const double nearest = std::round(extrasWant);
+            if (std::abs(extrasWant - nearest) <= kSnap) {
+                out.genCount = static_cast<size_t>(nearest);
+                this->acc = 0.0;
+                out.acc = 0.0;
+                return out;
             }
-            out.genCount = *this->locked;
-            this->acc = 0.0;
-            out.acc = 0.0;
+
+            this->acc += extrasWant;
+            int extra = static_cast<int>(std::floor(this->acc));
+            extra = std::clamp(extra, 0, static_cast<int>(maxGen));
+            this->acc -= static_cast<double>(extra);
+            this->acc = std::clamp(this->acc, 0.0, 0.999);
+            out.genCount = static_cast<size_t>(extra);
+            out.acc = this->acc;
+            out.ingest = extra == 0;
             return out;
         }
 
@@ -145,8 +142,48 @@ namespace lsfgvk::layer {
     private:
         std::optional<Clock::time_point> frameAt;
         std::optional<double> emaDt;
-        std::optional<size_t> locked;
         double acc{0.0};
+    };
+
+    /// Space Adaptive QueuePresent calls onto 1/target_fps slots.
+    ///
+    /// Original LS Adaptive presents from its own capture window at the
+    /// panel rate, so 30 generated frames occupy 30 distinct vsyncs.
+    /// This layer presents on the game swapchain: extra+real in the same
+    /// millisecond are coalesced by Gamescope (mailbox-like). Waiting one
+    /// slot after each present lets consecutive vsyncs show extra then real.
+    class DisplaySlotPacer {
+    public:
+        using Clock = std::chrono::steady_clock;
+
+        /// Sleep until the next display slot. Returns seconds actually slept.
+        double wait(double targetFps) {
+            const double hz = std::clamp(targetFps, 30.0, 240.0);
+            const auto slot = std::chrono::duration_cast<Clock::duration>(
+                std::chrono::duration<double>(1.0 / hz));
+            const auto now = Clock::now();
+            if (!this->nextAt.has_value()) {
+                this->nextAt = now + slot;
+                return 0.0;
+            }
+            auto target = *this->nextAt;
+            if (now > target + slot * 3 / 2)
+                target = now;
+            double slept = 0.0;
+            if (now < target) {
+                std::this_thread::sleep_until(target);
+                slept = std::chrono::duration<double>(Clock::now() - now).count();
+            }
+            const auto after = Clock::now();
+            const auto base = after > target ? after : target;
+            this->nextAt = base + slot;
+            return slept;
+        }
+
+        void reset() { this->nextAt.reset(); }
+
+    private:
+        std::optional<Clock::time_point> nextAt;
     };
 
 }

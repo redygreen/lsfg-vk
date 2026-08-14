@@ -93,6 +93,7 @@ namespace lsfgvk::layer {
             VkSwapchainKHR swapchain, void* next_chain, uint32_t imageIdx,
             size_t genCount, bool presentRealWithInternalSemaphores);
         void forceFifo(void* next_chain) const;
+        void waitDisplaySlot();
 
         std::vector<vk::Image> sourceImages;
         std::vector<vk::Image> destinationImages;
@@ -118,12 +119,14 @@ namespace lsfgvk::layer {
         SwapchainInfo info;
 
         AdaptivePacer pacer;
+        DisplaySlotPacer slotPacer;
         double lastGameDt{0.0};
         double lastWorkDt{0.0};
         double lastWaitDt{0.0};
         double lastEmaDt{0.0};
         double lastAcc{0.0};
         double lastExtrasWant{0.0};
+        double lastPacedMs{0.0};
         size_t logPresentsRemaining{16};
         bool lastIngest{false};
         bool renderFenceInFlight{false};

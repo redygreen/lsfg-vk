@@ -189,6 +189,7 @@ VkResult Swapchain::present(const vk::Vulkan& vk,
         const std::vector<VkSemaphore>& semaphores,
         const VkPresentInfoKHR* originalInfo) {
     const auto now = AdaptivePacer::Clock::now();
+    this->lastPacedMs = 0.0;
     const size_t genCount = !this->profile.enabled
         ? 0
         : this->profile.adaptive
@@ -245,6 +246,7 @@ VkResult Swapchain::present(const vk::Vulkan& vk,
             copyToSource(vk, swapchainImage, semaphores, ingest, copyDone,
                 this->copyFence->handle());
             this->copyFenceInFlight = true;
+            waitDisplaySlot();
             result = queuePresentOriginal(vk, queue, swapchain, next_chain, imageIdx,
                 semaphores, originalInfo, copyDone, true);
             if (this->logPresentsRemaining > 0)
@@ -254,13 +256,20 @@ VkResult Swapchain::present(const vk::Vulkan& vk,
                     + std::to_string(static_cast<int>(result)));
         }
     } catch (...) {
-        this->pacer.markFrame(now);
+        const auto paced = std::chrono::duration_cast<AdaptivePacer::Clock::duration>(
+            std::chrono::duration<double>(this->lastPacedMs / 1000.0));
+        this->pacer.markFrame(now + paced);
         this->fidx++;
         throw;
     }
 
-    this->pacer.markFrame(now);
+    const auto paced = std::chrono::duration_cast<AdaptivePacer::Clock::duration>(
+        std::chrono::duration<double>(this->lastPacedMs / 1000.0));
+    this->pacer.markFrame(now + paced);
     this->fidx++;
+    if (logThis)
+        layerLog("lsfg-vk: adaptive present done genCount=" + std::to_string(genCount)
+            + " paced_ms=" + std::to_string(this->lastPacedMs));
     recordFrameStats(genCount,
         this->profile.adaptive && this->lastIngest && genCount == 0,
         this->profile.target_fps, this->profile.adaptive);
@@ -438,6 +447,7 @@ VkResult Swapchain::presentGeneratedFrames(const vk::Vulkan& vk,
         if (i == genCount - 1)
             this->renderFenceInFlight = true;
 
+        waitDisplaySlot();
         const VkPresentInfoKHR presentInfo{
             .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
             .pNext = i ? nullptr : next_chain,
@@ -458,6 +468,7 @@ VkResult Swapchain::presentGeneratedFrames(const vk::Vulkan& vk,
         return res;
 
     auto& lastPCS = this->postCopySemaphores.at((this->idx - 1) % this->postCopySemaphores.size());
+    waitDisplaySlot();
     const VkPresentInfoKHR presentInfo{
         .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
         .waitSemaphoreCount = 1,
@@ -470,6 +481,13 @@ VkResult Swapchain::presentGeneratedFrames(const vk::Vulkan& vk,
     if (res != VK_SUCCESS && res != VK_SUBOPTIMAL_KHR)
         throw ls::vulkan_error(res, "vkQueuePresentKHR() failed");
     return res;
+}
+
+void Swapchain::waitDisplaySlot() {
+    if (!this->profile.adaptive)
+        return;
+    this->lastPacedMs += this->slotPacer.wait(
+        static_cast<double>(this->profile.target_fps)) * 1000.0;
 }
 
 void Swapchain::forceFifo(void* next_chain) const {
